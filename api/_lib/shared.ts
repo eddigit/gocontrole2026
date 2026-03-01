@@ -101,12 +101,21 @@ export function cors(req: VercelRequest, res: VercelResponse): boolean {
 export async function ensureAdmin(): Promise<void> {
   const email = process.env.ADMIN_EMAIL || 'admin@gocontrole.local';
   const password = process.env.ADMIN_PASSWORD || 'admin123';
+  const hashed = await hashPassword(password);
   const existing = await prisma.user.findUnique({ where: { email } });
   if (!existing) {
-    const hashed = await hashPassword(password);
     await prisma.user.create({
       data: { email, password: hashed, name: 'Admin', role: 'ADMIN' },
     });
+  } else {
+    // Update password if it changed
+    const match = await verifyPassword(password, existing.password);
+    if (!match) {
+      await prisma.user.update({
+        where: { email },
+        data: { password: hashed },
+      });
+    }
   }
 }
 
