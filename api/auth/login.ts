@@ -12,7 +12,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await ensureDatabase();
     await ensureAdmin();
 
-    const body = parseBody(req);
+    const body = await parseBody(req);
     const email = body.email as string | undefined;
     const password = body.password as string | undefined;
 

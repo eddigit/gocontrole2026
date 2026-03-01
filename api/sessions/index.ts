@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      const { name } = parseBody(req) as any;
+      const { name } = await parseBody(req) as any;
 
       if (!name) {
         return res.status(400).json({ error: 'name is required' });

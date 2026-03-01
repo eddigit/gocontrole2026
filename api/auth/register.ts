@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { email, password, name, role } = parseBody(req) as any;
+    const { email, password, name, role } = await parseBody(req) as any;
 
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Email, password, and name are required' });

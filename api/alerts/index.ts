@@ -22,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      const { targetId, triggerOn, channel, destination, cooldownMin } = parseBody(req) as any;
+      const { targetId, triggerOn, channel, destination, cooldownMin } = await parseBody(req) as any;
 
       if (!targetId || !triggerOn) {
         return res.status(400).json({ error: 'targetId and triggerOn are required' });

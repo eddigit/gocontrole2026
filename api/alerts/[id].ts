@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'PATCH') {
-      const { isActive } = parseBody(req) as any;
+      const { isActive } = await parseBody(req) as any;
 
       const alert = await prisma.alertRule.findFirst({
         where: { id, userId: auth.userId },

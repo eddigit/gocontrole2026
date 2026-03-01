@@ -124,17 +124,35 @@ export function formatPhone(phone: string): string {
 
 /**
  * Safely parse request body. Handles Vercel runtime body parsing edge cases.
+ * Falls back to reading raw request stream if req.body getter throws.
  */
-export function parseBody(req: VercelRequest): Record<string, unknown> {
+export async function parseBody(req: VercelRequest): Promise<Record<string, unknown>> {
+  // First try the built-in body parser
   try {
-    if (typeof req.body === 'object' && req.body !== null) {
-      return req.body;
+    const body = req.body;
+    if (typeof body === 'object' && body !== null) {
+      return body;
     }
-    if (typeof req.body === 'string') {
-      return JSON.parse(req.body);
+    if (typeof body === 'string' && body.length > 0) {
+      return JSON.parse(body);
     }
-    return {};
   } catch {
-    return {};
+    // req.body getter threw - fall through to raw stream read
   }
+
+  // Read raw body from the request stream
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const raw = Buffer.concat(chunks).toString('utf-8');
+    if (raw.length > 0) {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // Failed to read or parse
+  }
+
+  return {};
 }
