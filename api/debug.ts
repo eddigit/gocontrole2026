@@ -5,62 +5,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const results: Record<string, unknown> = {};
 
-  // Test 1: Prisma import
+  // Test the shared module import
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const prisma = new PrismaClient();
-    results.prismaImport = 'ok';
+    const shared = await import('./_lib/shared.js');
+    results.sharedImport = 'ok';
+    results.sharedExports = Object.keys(shared);
 
-    // Test 2: Database connection
+    // Test ensureDatabase
     try {
-      await prisma.$queryRaw`SELECT 1 as test`;
-      results.dbConnection = 'ok';
+      await shared.ensureDatabase();
+      results.ensureDatabase = 'ok';
     } catch (e: any) {
-      results.dbConnection = { error: e.message };
+      results.ensureDatabase = { error: e.message, stack: e.stack?.slice(0, 500) };
     }
 
-    // Test 3: User table query
+    // Test ensureAdmin
     try {
-      const count = await prisma.user.count();
-      results.userTable = { ok: true, count };
+      await shared.ensureAdmin();
+      results.ensureAdmin = 'ok';
     } catch (e: any) {
-      results.userTable = { error: e.message, code: e.code };
+      results.ensureAdmin = { error: e.message, stack: e.stack?.slice(0, 500) };
     }
 
-    await prisma.$disconnect();
-  } catch (e: any) {
-    results.prismaImport = { error: e.message };
-  }
+    // Test findUnique
+    const email = process.env.ADMIN_EMAIL || 'admin@gocontrole.local';
+    try {
+      const user = await shared.prisma.user.findUnique({ where: { email } });
+      results.findUser = user ? { found: true, id: user.id, email: user.email, role: user.role, passwordLength: user.password?.length } : { found: false };
+    } catch (e: any) {
+      results.findUser = { error: e.message };
+    }
 
-  // Test 4: bcrypt
-  try {
-    const bcrypt = await import('bcryptjs');
-    const hash = await bcrypt.hash('test', 10);
-    const valid = await bcrypt.compare('test', hash);
-    results.bcrypt = { ok: true, valid };
-  } catch (e: any) {
-    results.bcrypt = { error: e.message };
-  }
+    // Test verifyPassword
+    const password = process.env.ADMIN_PASSWORD || 'admin123';
+    try {
+      const user = await shared.prisma.user.findUnique({ where: { email } });
+      if (user) {
+        const valid = await shared.verifyPassword(password, user.password);
+        results.verifyPassword = { valid };
+      } else {
+        results.verifyPassword = { error: 'no user found' };
+      }
+    } catch (e: any) {
+      results.verifyPassword = { error: e.message };
+    }
 
-  // Test 5: jsonwebtoken
-  try {
-    const jwt = await import('jsonwebtoken');
-    const token = jwt.default.sign({ test: true }, 'secret', { expiresIn: '1h' } as any);
-    results.jwt = { ok: true, tokenLength: token.length };
+    // Test signToken
+    try {
+      const token = shared.signToken({ userId: 'test', email: 'test@test.com', role: 'ADMIN' });
+      results.signToken = { ok: true, tokenLength: token.length };
+    } catch (e: any) {
+      results.signToken = { error: e.message, stack: e.stack?.slice(0, 500) };
+    }
   } catch (e: any) {
-    results.jwt = { error: e.message };
+    results.sharedImport = { error: e.message, stack: e.stack?.slice(0, 500) };
   }
-
-  // Test 6: env vars
-  results.envVars = {
-    POSTGRES_PRISMA_URL: process.env.POSTGRES_PRISMA_URL ? 'set' : 'missing',
-    POSTGRES_URL_NON_POOLING: process.env.POSTGRES_URL_NON_POOLING ? 'set' : 'missing',
-    DATABASE_URL: process.env.DATABASE_URL ? 'set' : 'missing',
-    JWT_SECRET: process.env.JWT_SECRET ? 'set' : 'missing',
-    ADMIN_EMAIL: process.env.ADMIN_EMAIL ? 'set' : 'missing',
-    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD ? 'set' : 'missing',
-    NODE_ENV: process.env.NODE_ENV,
-  };
 
   return res.status(200).json(results);
 }
