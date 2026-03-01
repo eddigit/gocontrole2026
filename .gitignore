@@ -1,0 +1,11 @@
+node_modules/
+dist/
+client/node_modules/
+client/dist/
+.env
+*.log
+auth_info_baileys/
+prisma/migrations/**/migration_lock.toml
+.DS_Store
+coverage/
+.vite/

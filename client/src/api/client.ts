@@ -1,0 +1,95 @@
+import axios from 'axios';
+import { io, Socket } from 'socket.io-client';
+
+const API_BASE = '/api';
+
+const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+// Inject JWT token into requests
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('gc_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Handle 401 responses
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('gc_token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  },
+);
+
+export default api;
+
+// Socket.IO singleton
+let socket: Socket | null = null;
+
+export function getSocket(): Socket {
+  if (!socket) {
+    socket = io('/', {
+      autoConnect: true,
+      transports: ['websocket', 'polling'],
+    });
+  }
+  return socket;
+}
+
+export function disconnectSocket(): void {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+}
+
+// API functions
+export const authApi = {
+  login: (email: string, password: string) =>
+    api.post('/auth/login', { email, password }),
+  me: () => api.get('/auth/me'),
+  register: (data: { email: string; password: string; name: string; role?: string }) =>
+    api.post('/auth/register', data),
+};
+
+export const dashboardApi = {
+  summary: () => api.get('/dashboard/summary'),
+};
+
+export const targetApi = {
+  list: () => api.get('/targets'),
+  get: (id: string) => api.get(`/targets/${id}`),
+  create: (data: { phoneNumber: string; label?: string; sessionId?: string }) =>
+    api.post('/targets', data),
+  delete: (id: string) => api.delete(`/targets/${id}`),
+  history: (id: string, params?: Record<string, string>) =>
+    api.get(`/targets/${id}/history`, { params }),
+  timeline: (id: string, params?: Record<string, string>) =>
+    api.get(`/targets/${id}/timeline`, { params }),
+};
+
+export const sessionApi = {
+  list: () => api.get('/sessions'),
+  create: (name: string) => api.post('/sessions', { name }),
+  get: (id: string) => api.get(`/sessions/${id}`),
+  start: (id: string) => api.post(`/sessions/${id}/start`),
+  stop: (id: string) => api.post(`/sessions/${id}/stop`),
+  delete: (id: string) => api.delete(`/sessions/${id}`),
+  qr: (id: string) => api.get(`/sessions/${id}/qr`),
+};
+
+export const alertApi = {
+  list: () => api.get('/alerts'),
+  create: (data: { targetId: string; triggerOn: string; channel?: string }) =>
+    api.post('/alerts', data),
+  update: (id: string, data: Record<string, unknown>) => api.put(`/alerts/${id}`, data),
+  delete: (id: string) => api.delete(`/alerts/${id}`),
+};

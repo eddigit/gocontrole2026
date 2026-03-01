@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gocontrole-db
+    environment:
+      POSTGRES_DB: gocontrole
+      POSTGRES_USER: gocontrole
+      POSTGRES_PASSWORD: gocontrole_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gocontrole"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gocontrole-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gocontrole-app
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://gocontrole:gocontrole_secret@postgres:5432/gocontrole?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_EXPIRES_IN: 24h
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gocontrole.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

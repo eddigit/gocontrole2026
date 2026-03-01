@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Users & Auth ---
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(OPERATOR)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  alertRules AlertRule[]
+}
+
+// --- WhatsApp Sessions ---
+
+enum SessionStatus {
+  CONNECTED
+  CONNECTING
+  DISCONNECTED
+  DEGRADED
+  REQUIRES_REAUTH
+}
+
+model Session {
+  id                String        @id @default(uuid())
+  name              String
+  phoneNumber       String?       @unique
+  status            SessionStatus @default(DISCONNECTED)
+  lastConnected     DateTime?
+  lastError         String?
+  reconnectAttempts Int           @default(0)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  targets  Target[]
+  authKeys AuthKey[]
+}
+
+model AuthKey {
+  id        String  @id @default(uuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type      String
+  keyId     String
+  value     Json
+
+  @@unique([sessionId, type, keyId])
+  @@index([sessionId, type])
+}
+
+// --- Monitored Targets ---
+
+enum PresenceStatus {
+  ONLINE
+  LIKELY_ONLINE
+  UNCERTAIN
+  LIKELY_OFFLINE
+  OFFLINE
+}
+
+model Target {
+  id          String         @id @default(uuid())
+  jid         String         @unique
+  phoneNumber String
+  label       String?
+  sessionId   String
+  session     Session        @relation(fields: [sessionId], references: [id])
+  isActive    Boolean        @default(true)
+  status      PresenceStatus @default(OFFLINE)
+  confidence  Float          @default(0)
+  lastSeen    DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  presenceEvents  PresenceEvent[]
+  rttProbes       RttProbe[]
+  statusSnapshots StatusSnapshot[]
+  alertRules      AlertRule[]
+}
+
+// --- Detection Events ---
+
+enum PresenceState {
+  AVAILABLE
+  UNAVAILABLE
+  COMPOSING
+  RECORDING
+  PAUSED
+}
+
+model PresenceEvent {
+  id        String        @id @default(uuid())
+  targetId  String
+  target    Target        @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  state     PresenceState
+  timestamp DateTime      @default(now())
+  raw       Json?
+
+  @@index([targetId, timestamp])
+  @@index([timestamp])
+}
+
+enum RttClassification {
+  ACTIVE
+  STANDBY
+  OFFLINE
+}
+
+model RttProbe {
+  id             String            @id @default(uuid())
+  targetId       String
+  target         Target            @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  rttMs          Int?
+  movingAvg      Float?
+  medianRtt      Float?
+  classification RttClassification
+  timestamp      DateTime          @default(now())
+
+  @@index([targetId, timestamp])
+  @@index([timestamp])
+}
+
+model StatusSnapshot {
+  id         String         @id @default(uuid())
+  targetId   String
+  target     Target         @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  status     PresenceStatus
+  confidence Float
+  signals    Json
+  reasoning  String
+  timestamp  DateTime       @default(now())
+
+  @@index([targetId, timestamp])
+  @@index([timestamp])
+}
+
+// --- Alerts ---
+
+enum AlertType {
+  CAME_ONLINE
+  WENT_OFFLINE
+  LONG_SESSION
+  UNUSUAL_HOUR
+}
+
+enum AlertChannel {
+  WEBHOOK
+  WEBSOCKET
+}
+
+model AlertRule {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  targetId    String
+  target      Target       @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  triggerOn   AlertType
+  channel     AlertChannel @default(WEBSOCKET)
+  destination String       @default("")
+  isActive    Boolean      @default(true)
+  cooldownMin Int          @default(5)
+  lastFired   DateTime?
+  createdAt   DateTime     @default(now())
+}
