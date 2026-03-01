@@ -1,41 +1,47 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getSocket } from '../api/client';
+import { dashboardApi } from '../api/client';
 
 interface ConfidenceScore {
   jid: string;
   status: string;
   confidence: number;
-  signals: unknown[];
-  reasoning: string;
   timestamp: string;
 }
 
+/**
+ * Polling-based presence updates (Vercel serverless compatible).
+ * Polls the dashboard summary every 10 seconds.
+ */
 export function usePresenceUpdates() {
   const [scores, setScores] = useState<Map<string, ConfidenceScore>>(new Map());
 
-  useEffect(() => {
-    const socket = getSocket();
-
-    const handleUpdate = (score: ConfidenceScore) => {
-      setScores(prev => {
-        const next = new Map(prev);
-        next.set(score.jid, score);
-        return next;
-      });
-    };
-
-    socket.on('dashboard:update', handleUpdate);
-    socket.on('presence:update', handleUpdate);
-
-    return () => {
-      socket.off('dashboard:update', handleUpdate);
-      socket.off('presence:update', handleUpdate);
-    };
+  const fetchUpdates = useCallback(async () => {
+    try {
+      const res = await dashboardApi.summary();
+      const targets = res.data.targets || [];
+      const next = new Map<string, ConfidenceScore>();
+      for (const t of targets) {
+        next.set(t.jid, {
+          jid: t.jid,
+          status: t.status,
+          confidence: t.confidence,
+          timestamp: t.updatedAt,
+        });
+      }
+      setScores(next);
+    } catch {
+      // Silent fail — will retry on next poll
+    }
   }, []);
 
-  const subscribeToTargets = useCallback((jids: string[]) => {
-    const socket = getSocket();
-    socket.emit('target:subscribe', { jids });
+  useEffect(() => {
+    fetchUpdates();
+    const interval = setInterval(fetchUpdates, 10_000);
+    return () => clearInterval(interval);
+  }, [fetchUpdates]);
+
+  const subscribeToTargets = useCallback((_jids: string[]) => {
+    // No-op in polling mode — all targets are fetched via summary
   }, []);
 
   return { scores, subscribeToTargets };

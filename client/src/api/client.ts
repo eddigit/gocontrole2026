@@ -1,5 +1,4 @@
 import axios from 'axios';
-import { io, Socket } from 'socket.io-client';
 
 const API_BASE = '/api';
 
@@ -31,26 +30,6 @@ api.interceptors.response.use(
 
 export default api;
 
-// Socket.IO singleton
-let socket: Socket | null = null;
-
-export function getSocket(): Socket {
-  if (!socket) {
-    socket = io('/', {
-      autoConnect: true,
-      transports: ['websocket', 'polling'],
-    });
-  }
-  return socket;
-}
-
-export function disconnectSocket(): void {
-  if (socket) {
-    socket.disconnect();
-    socket = null;
-  }
-}
-
 // API functions
 export const authApi = {
   login: (email: string, password: string) =>
@@ -70,26 +49,19 @@ export const targetApi = {
   create: (data: { phoneNumber: string; label?: string; sessionId?: string }) =>
     api.post('/targets', data),
   delete: (id: string) => api.delete(`/targets/${id}`),
-  history: (id: string, params?: Record<string, string>) =>
-    api.get(`/targets/${id}/history`, { params }),
-  timeline: (id: string, params?: Record<string, string>) =>
-    api.get(`/targets/${id}/timeline`, { params }),
 };
 
 export const sessionApi = {
   list: () => api.get('/sessions'),
   create: (name: string) => api.post('/sessions', { name }),
   get: (id: string) => api.get(`/sessions/${id}`),
-  start: (id: string) => api.post(`/sessions/${id}/start`),
-  stop: (id: string) => api.post(`/sessions/${id}/stop`),
   delete: (id: string) => api.delete(`/sessions/${id}`),
-  qr: (id: string) => api.get(`/sessions/${id}/qr`),
 };
 
 export const alertApi = {
   list: () => api.get('/alerts'),
   create: (data: { targetId: string; triggerOn: string; channel?: string }) =>
     api.post('/alerts', data),
-  update: (id: string, data: Record<string, unknown>) => api.put(`/alerts/${id}`, data),
+  update: (id: string, data: Record<string, unknown>) => api.patch(`/alerts/${id}`, data),
   delete: (id: string) => api.delete(`/alerts/${id}`),
 };

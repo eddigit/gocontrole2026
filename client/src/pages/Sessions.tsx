@@ -72,14 +72,13 @@ export default function Sessions() {
     fetchSessions();
   };
 
-  const handleStart = async (id: string) => {
-    await sessionApi.start(id);
-    fetchSessions();
+  // Start/stop not available in serverless mode (requires persistent backend)
+  const handleStart = async (_id: string) => {
+    alert('Le demarrage de session WhatsApp necessite le backend Docker. En mode Vercel, les sessions sont gerees manuellement.');
   };
 
-  const handleStop = async (id: string) => {
-    await sessionApi.stop(id);
-    fetchSessions();
+  const handleStop = async (_id: string) => {
+    alert('L\'arret de session WhatsApp necessite le backend Docker. En mode Vercel, les sessions sont gerees manuellement.');
   };
 
   if (loading) {

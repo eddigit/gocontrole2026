@@ -41,12 +41,9 @@ export default function TargetDetail() {
 
     const fetchData = async () => {
       try {
-        const [targetRes, timelineRes] = await Promise.all([
-          targetApi.get(id),
-          targetApi.timeline(id),
-        ]);
+        const targetRes = await targetApi.get(id);
         setTarget(targetRes.data.target);
-        setTimeline(timelineRes.data.timeline);
+        setTimeline(targetRes.data.timeline || []);
         subscribeToTargets([targetRes.data.target.jid]);
       } catch {
         navigate('/');
