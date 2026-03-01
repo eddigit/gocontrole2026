@@ -5,7 +5,6 @@ import fastifyStatic from '@fastify/static';
 import { Server as SocketServer } from 'socket.io';
 import http from 'http';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { env } from '../config/index.js';
 import { createChildLogger } from '../utils/logger.js';
 import { authRoutes } from './routes/auth.routes.js';
@@ -68,7 +67,6 @@ export async function createServer(context: AppContext) {
   await fastify.register(healthRoutes, { prefix: '/api/health' });
 
   // Serve React frontend static files
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const clientDir = path.join(__dirname, '..', 'client');
   try {
     await fastify.register(fastifyStatic, {
