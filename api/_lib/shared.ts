@@ -121,3 +121,20 @@ export function phoneToJid(phone: string): string {
 export function formatPhone(phone: string): string {
   return phone.replace(/[\s\-\(\)]/g, '').replace(/^\+/, '');
 }
+
+/**
+ * Safely parse request body. Handles Vercel runtime body parsing edge cases.
+ */
+export function parseBody(req: VercelRequest): Record<string, unknown> {
+  try {
+    if (typeof req.body === 'object' && req.body !== null) {
+      return req.body;
+    }
+    if (typeof req.body === 'string') {
+      return JSON.parse(req.body);
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}

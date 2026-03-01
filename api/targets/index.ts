@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma, authenticate, cors, phoneToJid, formatPhone } from '../_lib/shared.js';
+import { prisma, authenticate, cors, phoneToJid, formatPhone, parseBody } from '../_lib/shared.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -21,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      const { phoneNumber, label, sessionId } = req.body || {};
+      const { phoneNumber, label, sessionId } = parseBody(req) as any;
 
       if (!phoneNumber) {
         return res.status(400).json({ error: 'phoneNumber is required' });

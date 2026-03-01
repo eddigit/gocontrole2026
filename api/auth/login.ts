@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma, verifyPassword, signToken, cors, ensureAdmin, ensureDatabase } from '../_lib/shared.js';
+import { prisma, verifyPassword, signToken, cors, ensureAdmin, ensureDatabase, parseBody } from '../_lib/shared.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -9,11 +9,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // Ensure database tables + admin user exist on first call
     await ensureDatabase();
     await ensureAdmin();
 
-    const { email, password } = req.body || {};
+    const body = parseBody(req);
+    const email = body.email as string | undefined;
+    const password = body.password as string | undefined;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -41,14 +42,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch (err: any) {
     console.error('Login error:', err);
-    return res.status(500).json({
-      error: 'Internal server error',
-      detail: {
-        message: err?.message,
-        code: err?.code,
-        name: err?.name,
-        stack: err?.stack?.slice(0, 500),
-      },
-    });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }

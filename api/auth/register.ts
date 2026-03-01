@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma, hashPassword, authenticate, cors } from '../_lib/shared.js';
+import { prisma, hashPassword, authenticate, cors, parseBody } from '../_lib/shared.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { email, password, name, role } = req.body || {};
+    const { email, password, name, role } = parseBody(req) as any;
 
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Email, password, and name are required' });

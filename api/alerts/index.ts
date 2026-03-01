@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma, authenticate, cors } from '../_lib/shared.js';
+import { prisma, authenticate, cors, parseBody } from '../_lib/shared.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -22,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'POST') {
-      const { targetId, triggerOn, channel, destination, cooldownMin } = req.body || {};
+      const { targetId, triggerOn, channel, destination, cooldownMin } = parseBody(req) as any;
 
       if (!targetId || !triggerOn) {
         return res.status(400).json({ error: 'targetId and triggerOn are required' });
