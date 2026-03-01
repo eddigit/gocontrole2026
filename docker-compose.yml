@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,28 +6,26 @@ services:
       POSTGRES_DB: gocontrole
       POSTGRES_USER: gocontrole
       POSTGRES_PASSWORD: gocontrole_secret
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - gocontrole_postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gocontrole"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: gocontrole-redis
-    ports:
-      - "6379:6379"
     volumes:
-      - redis_data:/data
+      - gocontrole_redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   app:
     build:
@@ -40,14 +36,16 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: postgresql://gocontrole:gocontrole_secret@postgres:5432/gocontrole?schema=public
+      POSTGRES_PRISMA_URL: postgresql://gocontrole:gocontrole_secret@postgres:5432/gocontrole?schema=public
+      POSTGRES_URL_NON_POOLING: postgresql://gocontrole:gocontrole_secret@postgres:5432/gocontrole?schema=public
       REDIS_URL: redis://redis:6379
       PORT: 3000
       HOST: 0.0.0.0
       NODE_ENV: production
-      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_SECRET: GoControle2026JwtSecretKey
       JWT_EXPIRES_IN: 24h
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gocontrole.local}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ADMIN_EMAIL: admin@gocontrole.local
+      ADMIN_PASSWORD: GoControle2026Secure
       LOG_LEVEL: info
     depends_on:
       postgres:
@@ -57,5 +55,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
-  redis_data:
+  gocontrole_postgres:
+  gocontrole_redis:
