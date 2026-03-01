@@ -51,7 +51,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export function signToken(payload: Record<string, unknown>): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string): Record<string, unknown> {
@@ -72,7 +72,7 @@ export function authenticate(req: VercelRequest): AuthPayload | null {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return null;
   try {
-    const payload = verifyToken(authHeader.slice(7)) as AuthPayload;
+    const payload = verifyToken(authHeader.slice(7)) as unknown as AuthPayload;
     if (!payload.userId) return null;
     return payload;
   } catch {
