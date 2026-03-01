@@ -1,8 +1,11 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import fastifyStatic from '@fastify/static';
 import { Server as SocketServer } from 'socket.io';
 import http from 'http';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { env } from '../config/index.js';
 import { createChildLogger } from '../utils/logger.js';
 import { authRoutes } from './routes/auth.routes.js';
@@ -63,6 +66,31 @@ export async function createServer(context: AppContext) {
   await fastify.register(dashboardRoutes, { prefix: '/api/dashboard' });
   await fastify.register(alertRoutes, { prefix: '/api/alerts' });
   await fastify.register(healthRoutes, { prefix: '/api/health' });
+
+  // Serve React frontend static files
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const clientDir = path.join(__dirname, '..', 'client');
+  try {
+    await fastify.register(fastifyStatic, {
+      root: clientDir,
+      prefix: '/',
+      wildcard: false,
+    });
+    // SPA fallback: return index.html for all non-API routes
+    fastify.setNotFoundHandler((request, reply) => {
+      if (request.url.startsWith('/api/')) {
+        reply.status(404).send({ error: 'Not found' });
+      } else {
+        reply.sendFile('index.html');
+      }
+    });
+    log.info({ clientDir }, 'Serving frontend static files');
+  } catch {
+    log.warn('Frontend static files not found, API-only mode');
+    fastify.setNotFoundHandler((_, reply) => {
+      reply.status(404).send({ error: 'Not found' });
+    });
+  }
 
   // Error handler
   fastify.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
