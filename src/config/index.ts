@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 const envSchema = z.object({
-  DATABASE_URL: z.string(),
+  DATABASE_URL: z.string().optional(),
+  POSTGRES_PRISMA_URL: z.string().optional(),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   PORT: z.coerce.number().default(3000),
   HOST: z.string().default('0.0.0.0'),
