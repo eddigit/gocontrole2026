@@ -1,12 +1,42 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { execSync } from 'child_process';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // Singleton Prisma client for serverless (reused across warm invocations)
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient; dbReady: boolean };
 export const prisma = globalForPrisma.prisma ?? new PrismaClient();
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+
+/**
+ * Ensure database tables exist. Runs `prisma db push` once per cold start.
+ * This handles the case where the build can't access the DB (e.g. Supabase pooler).
+ */
+export async function ensureDatabase(): Promise<void> {
+  if (globalForPrisma.dbReady) return;
+  try {
+    // Quick check: try to query the User table
+    await prisma.user.count();
+    globalForPrisma.dbReady = true;
+  } catch (err: any) {
+    if (err?.code === 'P2021' || err?.message?.includes('does not exist')) {
+      // Tables don't exist yet — run prisma db push
+      console.log('Tables not found, running prisma db push...');
+      try {
+        execSync('npx prisma db push --skip-generate --accept-data-loss', {
+          stdio: 'inherit',
+          timeout: 25_000,
+        });
+        console.log('Database schema pushed successfully');
+      } catch (pushErr) {
+        console.error('Failed to push schema:', pushErr);
+        throw new Error('Database not ready');
+      }
+    }
+    globalForPrisma.dbReady = true;
+  }
+}
 
 const SALT_ROUNDS = 12;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-in-production';

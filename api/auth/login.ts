@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma, verifyPassword, signToken, cors, ensureAdmin } from '../_lib/shared.js';
+import { prisma, verifyPassword, signToken, cors, ensureAdmin, ensureDatabase } from '../_lib/shared.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cors(req, res)) return;
@@ -9,7 +9,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // Ensure admin user exists on first call
+    // Ensure database tables + admin user exist on first call
+    await ensureDatabase();
     await ensureAdmin();
 
     const { email, password } = req.body || {};

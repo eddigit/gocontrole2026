@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npx prisma generate && npx prisma db push --skip-generate && cd client && npm install && npm run build",
+  "buildCommand": "npx prisma generate && cd client && npm install && npm run build",
   "outputDirectory": "client/dist",
   "installCommand": "npm install",
   "framework": null,
