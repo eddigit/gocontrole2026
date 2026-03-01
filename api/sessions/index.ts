@@ -11,7 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'GET') {
-      const sessions = await prisma.session.findMany({
+      const raw = await prisma.session.findMany({
         orderBy: { createdAt: 'asc' },
         select: {
           id: true,
@@ -24,6 +24,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           _count: { select: { targets: true } },
         },
       });
+      const sessions = raw.map(({ _count, ...s }) => ({
+        ...s,
+        targetCount: _count.targets,
+      }));
       return res.status(200).json({ sessions });
     }
 
