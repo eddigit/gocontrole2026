@@ -91,7 +91,7 @@ export class ConnectionManager extends EventEmitter {
     this.startHealthCheck();
   }
 
-  private handleConnectionUpdate(update: Partial<ConnectionState>): void {
+  private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -124,6 +124,10 @@ export class ConnectionManager extends EventEmitter {
       const phoneNumber = this.sock?.user?.id?.replace(/:.*$/, '').replace('@s.whatsapp.net', '') ?? undefined;
       log.info({ sessionId: this.sessionId, phoneNumber }, 'Connected to WhatsApp');
       this.reconnectAttempts = 0;
+
+      // Mark device as passive so presence updates keep flowing without affecting the master phone
+      await this.sock?.sendPresenceUpdate('unavailable').catch(() => {});
+
       this.emit('connection', { type: 'connected', phoneNumber } satisfies ConnectionEvent);
       this.updateSessionStatus('CONNECTED', phoneNumber);
     }
