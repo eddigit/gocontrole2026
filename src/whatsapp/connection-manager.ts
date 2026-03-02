@@ -49,6 +49,15 @@ export class ConnectionManager extends EventEmitter {
 
   async connect(): Promise<void> {
     this.isClosing = false;
+
+    // Clean up any existing socket before creating a new one (prevents conflict loops)
+    if (this.sock) {
+      this.sock.ev.removeAllListeners('connection.update');
+      this.sock.ev.removeAllListeners('creds.update');
+      this.sock.end(undefined);
+      this.sock = null;
+    }
+
     log.info({ sessionId: this.sessionId }, 'Starting WhatsApp connection');
 
     const { state, saveCreds } = await usePostgresAuthState(this.prisma, this.sessionId);
