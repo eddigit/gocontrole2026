@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Plus, RefreshCw, Users } from 'lucide-react';
-import { dashboardApi, targetApi } from '../api/client';
+import { Plus, RefreshCw, Users, AlertCircle } from 'lucide-react';
+import { dashboardApi, targetApi, sessionApi } from '../api/client';
 import { usePresenceUpdates } from '../hooks/usePresence';
 import TargetCard from '../components/TargetCard';
 import StatusBadge from '../components/StatusBadge';
@@ -14,6 +14,14 @@ interface Target {
   confidence: number;
   lastSeen: string | null;
   updatedAt: string;
+}
+
+interface SessionInfo {
+  id: string;
+  name: string;
+  phoneNumber: string | null;
+  status: string;
+  targetCount: number;
 }
 
 interface DashboardData {
@@ -34,13 +42,16 @@ export default function Dashboard() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newPhone, setNewPhone] = useState('');
   const [newLabel, setNewLabel] = useState('');
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [addError, setAddError] = useState('');
+  const [adding, setAdding] = useState(false);
   const { scores, subscribeToTargets } = usePresenceUpdates();
 
   const fetchData = async () => {
     try {
       const res = await dashboardApi.summary();
       setData(res.data);
-      // Subscribe to real-time updates for all targets
       const jids = res.data.targets.map((t: Target) => t.jid);
       subscribeToTargets(jids);
     } catch {
@@ -52,22 +63,43 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30_000); // Refresh every 30s
+    const interval = setInterval(fetchData, 30_000);
     return () => clearInterval(interval);
   }, []);
 
+  // Load sessions when modal opens
+  useEffect(() => {
+    if (showAddModal) {
+      sessionApi.list().then(res => {
+        setSessions(res.data.sessions);
+      }).catch(() => {});
+    }
+  }, [showAddModal]);
+
   const handleAddTarget = async () => {
     if (!newPhone.trim()) return;
+    setAddError('');
+    setAdding(true);
     try {
-      await targetApi.create({ phoneNumber: newPhone, label: newLabel || undefined });
+      await targetApi.create({
+        phoneNumber: newPhone,
+        label: newLabel || undefined,
+        sessionId: selectedSessionId || undefined,
+      });
       setNewPhone('');
       setNewLabel('');
+      setSelectedSessionId('');
       setShowAddModal(false);
       fetchData();
-    } catch {
-      alert('Erreur lors de l\'ajout du numero');
+    } catch (err: any) {
+      const msg = err.response?.data?.error || 'Erreur inconnue lors de l\'ajout';
+      setAddError(msg);
+    } finally {
+      setAdding(false);
     }
   };
+
+  const connectedSessions = sessions.filter(s => s.status === 'CONNECTED');
 
   if (loading) {
     return (
@@ -149,22 +181,34 @@ export default function Dashboard() {
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-semibold mb-4">Ajouter un numero</h3>
+            <h3 className="text-lg font-semibold mb-4">Ajouter une cible</h3>
 
+            {/* Error display */}
+            {addError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                <AlertCircle size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-red-700">{addError}</p>
+              </div>
+            )}
+
+            {/* Phone number */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Numero de telephone (format international)
+                Numero de telephone cible
               </label>
               <input
                 type="text"
                 value={newPhone}
-                onChange={(e) => setNewPhone(e.target.value)}
+                onChange={(e) => { setNewPhone(e.target.value); setAddError(''); }}
                 placeholder="33612345678"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddTarget()}
               />
+              <p className="text-xs text-gray-400 mt-1">Format international sans + ni espaces</p>
             </div>
 
-            <div className="mb-6">
+            {/* Label */}
+            <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Label (optionnel)
               </label>
@@ -177,18 +221,55 @@ export default function Dashboard() {
               />
             </div>
 
+            {/* Session selector */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Session WhatsApp
+              </label>
+              {sessions.length === 0 ? (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-sm text-yellow-800 font-medium">Aucune session disponible</p>
+                  <p className="text-xs text-yellow-600 mt-1">
+                    Allez dans "Sessions WhatsApp" pour creer et connecter une session.
+                  </p>
+                </div>
+              ) : connectedSessions.length === 0 ? (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-sm text-yellow-800 font-medium">Aucune session connectee</p>
+                  <p className="text-xs text-yellow-600 mt-1">
+                    {sessions.length} session(s) trouvee(s) mais aucune n'est connectee.
+                    Connectez une session d'abord.
+                  </p>
+                </div>
+              ) : (
+                <select
+                  value={selectedSessionId}
+                  onChange={(e) => setSelectedSessionId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                >
+                  <option value="">Auto (session avec le moins de cibles)</option>
+                  {connectedSessions.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} — {s.phoneNumber ? `+${s.phoneNumber}` : 'Non appaire'} ({s.targetCount} cible{s.targetCount !== 1 ? 's' : ''})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
             <div className="flex gap-3 justify-end">
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={() => { setShowAddModal(false); setAddError(''); }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
               >
                 Annuler
               </button>
               <button
                 onClick={handleAddTarget}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+                disabled={adding || !newPhone.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
-                Ajouter
+                {adding ? 'Ajout en cours...' : 'Ajouter la cible'}
               </button>
             </div>
           </div>

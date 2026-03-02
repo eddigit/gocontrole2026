@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import type { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.js';
 import { phoneToJid, formatPhone } from '../../utils/jid.js';
+import type { SessionManager } from '../../whatsapp/session-manager.js';
 
 export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
   const { prisma, sessionManager, signalAggregator } = fastify.appContext;
@@ -25,19 +27,49 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
     const { phoneNumber, label } = request.body;
     let { sessionId } = request.body;
 
-    const jid = phoneToJid(phoneNumber);
+    if (!phoneNumber || !phoneNumber.trim()) {
+      return reply.status(400).send({ error: 'Numero de telephone requis' });
+    }
+
+    // Validate phone number format
+    let jid: string;
+    try {
+      jid = phoneToJid(phoneNumber);
+    } catch {
+      return reply.status(400).send({
+        error: 'Format de numero invalide. Utilisez le format international (ex: 33612345678)',
+      });
+    }
 
     // Check if already monitored
     const existing = await prisma.target.findUnique({ where: { jid } });
     if (existing) {
-      return reply.status(409).send({ error: 'Phone number already monitored' });
+      return reply.status(409).send({ error: 'Ce numero est deja surveille' });
     }
 
-    // Auto-assign session if not specified
-    if (!sessionId) {
-      sessionId = await sessionManager.findBestSession() ?? undefined;
+    // Validate or auto-assign session
+    if (sessionId) {
+      // Verify the provided session exists and is usable
+      const session = await prisma.session.findUnique({ where: { id: sessionId } });
+      if (!session) {
+        return reply.status(400).send({ error: 'Session introuvable' });
+      }
+      if (session.status !== 'CONNECTED') {
+        // Check in-memory connection as fallback (DB status can lag)
+        const conn = sessionManager.getConnection(sessionId);
+        if (!conn?.isConnected) {
+          return reply.status(400).send({
+            error: `La session "${session.name}" n'est pas connectee (statut: ${session.status}). Connectez-la d'abord.`,
+          });
+        }
+      }
+    } else {
+      // Auto-assign: prefer DB status, fallback to in-memory check
+      sessionId = await findBestAvailableSession(prisma, sessionManager);
       if (!sessionId) {
-        return reply.status(400).send({ error: 'No connected sessions available. Create a session first.' });
+        return reply.status(400).send({
+          error: 'Aucune session WhatsApp connectee. Allez dans "Sessions WhatsApp" pour creer et connecter une session.',
+        });
       }
     }
 
@@ -188,4 +220,37 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
 
     return { status: 'deleted' };
   });
+}
+
+/**
+ * Find the best available session for a new target.
+ * Checks DB status first, then falls back to in-memory connection status.
+ */
+async function findBestAvailableSession(
+  prisma: PrismaClient,
+  sessionManager: SessionManager,
+): Promise<string | undefined> {
+  // 1. Try DB-based lookup (sessions marked CONNECTED)
+  const dbSessions = await prisma.session.findMany({
+    where: { status: 'CONNECTED' },
+    include: { _count: { select: { targets: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (dbSessions.length > 0) {
+    const best = dbSessions.reduce((min, s) =>
+      s._count.targets < min._count.targets ? s : min,
+    );
+    return best.id;
+  }
+
+  // 2. Fallback: check in-memory connections (DB status may lag behind)
+  const connections = sessionManager.getConnections();
+  for (const [sessionId, conn] of connections) {
+    if (conn.isConnected) {
+      return sessionId;
+    }
+  }
+
+  return undefined;
 }
