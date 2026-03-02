@@ -21,6 +21,7 @@ import { pisteRoutes } from './routes/piste.routes.js';
 import type { PrismaClient } from '@prisma/client';
 import type { SessionManager } from '../whatsapp/session-manager.js';
 import type { SignalAggregator } from '../detection/signal-aggregator.js';
+import type { DetectionManager } from '../detection/detection-manager.js';
 
 const log = createChildLogger('api-server');
 
@@ -28,6 +29,7 @@ export interface AppContext {
   prisma: PrismaClient;
   sessionManager: SessionManager;
   signalAggregator: SignalAggregator;
+  detectionManager?: DetectionManager;
 }
 
 declare module 'fastify' {

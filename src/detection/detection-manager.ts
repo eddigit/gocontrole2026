@@ -108,6 +108,9 @@ export class DetectionManager {
     for (const [, detectors] of this.sessionDetectors) {
       detectors.presenceSubscriber.unsubscribe(jid);
       detectors.rttProber.stopProbing(jid);
+      detectors.messageInterceptor.removeJid(jid);
+      detectors.callDetector.removeJid(jid);
+      detectors.groupTracker.removeJid(jid);
     }
   }
 
@@ -151,10 +154,9 @@ export class DetectionManager {
     presenceSubscriber.on('signal', (signal) => this.signalAggregator.ingestSignal(signal));
     await presenceSubscriber.start(jids);
 
-    // Method 2: RTT Prober
+    // Method 2: RTT Prober — DISABLED (sends visible reactions to target phone)
     const rttProber = new RttProber(conn);
-    rttProber.on('signal', (signal) => this.signalAggregator.ingestSignal(signal));
-    await rttProber.start(jids);
+    // DO NOT start: rttProber.on('signal', ...) and rttProber.start() are intentionally skipped
 
     // Method 3: Behavioral Detector
     const behavioralDetector = new BehavioralDetector(conn);
@@ -207,11 +209,12 @@ export class DetectionManager {
   }
 
   private async addJidToDetectors(detectors: SessionDetectors, jid: string): Promise<void> {
+    // Methods 1-2: actively poll/subscribe
     await detectors.presenceSubscriber.subscribe(jid);
-    detectors.rttProber.startProbing(jid);
-    // MessageInterceptor, CallDetector, GroupTracker listen to all events
-    // from the session — they filter by monitored JIDs internally.
-    // Adding the JID to their internal tracking is handled by their start() method
-    // which listens to Baileys events. New JIDs are automatically covered.
+    // detectors.rttProber.startProbing(jid); // DISABLED — visible to target
+    // Methods 4-5-6: add to their monitored JID sets so they filter correctly
+    detectors.messageInterceptor.addJid(jid);
+    detectors.callDetector.addJid(jid);
+    detectors.groupTracker.addJid(jid);
   }
 }

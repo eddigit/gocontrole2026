@@ -38,7 +38,7 @@ async function main() {
   const detectionManager = new DetectionManager(prisma, sessionManager, signalAggregator, io);
 
   // Expose detection manager in app context for target routes to use
-  (fastify as any).detectionManager = detectionManager;
+  context.detectionManager = detectionManager;
 
   // Start signal aggregator
   signalAggregator.start();

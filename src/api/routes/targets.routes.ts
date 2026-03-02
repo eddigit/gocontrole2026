@@ -3,7 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.js';
 import { phoneToJid, formatPhone } from '../../utils/jid.js';
 import type { SessionManager } from '../../whatsapp/session-manager.js';
-import type { DetectionManager } from '../../detection/detection-manager.js';
+
 
 export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
   const { prisma, sessionManager, signalAggregator } = fastify.appContext;
@@ -84,7 +84,7 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
     });
 
     // Wire target into the full detection pipeline (all 6 methods)
-    const detectionManager = (fastify as any).detectionManager as DetectionManager | undefined;
+    const detectionManager = fastify.appContext.detectionManager;
     if (detectionManager) {
       await detectionManager.addTarget(sessionId, jid);
     } else {
@@ -214,7 +214,7 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // Remove from detection pipeline
-    const dm = (fastify as any).detectionManager as DetectionManager | undefined;
+    const dm = fastify.appContext.detectionManager;
     if (dm) {
       dm.removeTarget(target.jid);
     } else {
