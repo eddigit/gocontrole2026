@@ -213,6 +213,9 @@ export class ConnectionManager extends EventEmitter {
     if (!this.sock || !this.isConnected) {
       throw new Error('Not connected');
     }
+    // Resolve the contact first so Baileys has its name/metadata.
+    // Without this, presenceSubscribe silently fails with "no name present".
+    await this.sock.onWhatsApp(jid).catch(() => {});
     await this.sock.presenceSubscribe(jid);
   }
 
