@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Phone, Trash2, RefreshCw } from 'lucide-react';
-import { targetApi } from '../api/client';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import {
+  ArrowLeft, Phone, Trash2, RefreshCw, MessageSquare,
+  PhoneCall, Image, MapPin, Users, Trash
+} from 'lucide-react';
+import { targetApi, messageApi, callApi } from '../api/client';
 import { usePresenceUpdates } from '../hooks/usePresence';
 import StatusBadge from '../components/StatusBadge';
 import ConfidenceMeter from '../components/ConfidenceMeter';
@@ -34,6 +37,8 @@ export default function TargetDetail() {
   const [target, setTarget] = useState<TargetData | null>(null);
   const [timeline, setTimeline] = useState<{ status: string; confidence: number; timestamp: string }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [msgStats, setMsgStats] = useState<any>(null);
+  const [callStats, setCallStats] = useState<any>(null);
   const { scores, subscribeToTargets } = usePresenceUpdates();
 
   useEffect(() => {
@@ -45,6 +50,10 @@ export default function TargetDetail() {
         setTarget(targetRes.data.target);
         setTimeline(targetRes.data.timeline || []);
         subscribeToTargets([targetRes.data.target.jid]);
+
+        // Load stats (non-blocking)
+        messageApi.stats(id).then(r => setMsgStats(r.data)).catch(() => {});
+        callApi.stats(id).then(r => setCallStats(r.data)).catch(() => {});
       } catch {
         navigate('/');
       } finally {
@@ -134,6 +143,87 @@ export default function TargetDetail() {
         )}
       </div>
 
+      {/* Quick Access Cards - NEW */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Link
+          to={`/targets/${id}/messages`}
+          className="bg-white rounded-xl border border-gray-200 p-4 hover:border-blue-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-100">
+              <MessageSquare size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Messages</p>
+              <p className="text-xs text-gray-500">
+                {msgStats ? `${msgStats.total} interceptes` : 'Chargement...'}
+              </p>
+            </div>
+          </div>
+          {msgStats && msgStats.today > 0 && (
+            <div className="mt-2 text-xs text-blue-600 font-medium">
+              +{msgStats.today} aujourd'hui
+            </div>
+          )}
+        </Link>
+
+        <Link
+          to={`/targets/${id}/calls`}
+          className="bg-white rounded-xl border border-gray-200 p-4 hover:border-green-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-green-50 text-green-600 group-hover:bg-green-100">
+              <PhoneCall size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Appels</p>
+              <p className="text-xs text-gray-500">
+                {callStats ? `${callStats.total} detectes` : 'Chargement...'}
+              </p>
+            </div>
+          </div>
+          {callStats && callStats.today > 0 && (
+            <div className="mt-2 text-xs text-green-600 font-medium">
+              +{callStats.today} aujourd'hui
+            </div>
+          )}
+        </Link>
+
+        <Link
+          to={`/targets/${id}/media`}
+          className="bg-white rounded-xl border border-gray-200 p-4 hover:border-purple-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-purple-50 text-purple-600 group-hover:bg-purple-100">
+              <Image size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Medias</p>
+              <p className="text-xs text-gray-500">
+                {msgStats?.byType ? `${(msgStats.byType.IMAGE || 0) + (msgStats.byType.VIDEO || 0) + (msgStats.byType.AUDIO || 0) + (msgStats.byType.VOICE_NOTE || 0) + (msgStats.byType.DOCUMENT || 0)} fichiers` : 'Chargement...'}
+              </p>
+            </div>
+          </div>
+        </Link>
+
+        <Link
+          to={`/targets/${id}/messages`}
+          className="bg-white rounded-xl border border-gray-200 p-4 hover:border-red-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-red-50 text-red-600 group-hover:bg-red-100">
+              <Trash size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Supprimes</p>
+              <p className="text-xs text-gray-500">
+                {msgStats ? `${msgStats.deleted} messages` : 'Chargement...'}
+              </p>
+            </div>
+          </div>
+        </Link>
+      </div>
+
       {/* Timeline Chart */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4">Timeline de confiance (24h)</h3>
@@ -170,6 +260,18 @@ export default function TargetDetail() {
             <span className="text-gray-500">Statut actuel</span>
             <div className="mt-1"><StatusBadge status={currentStatus} size="sm" /></div>
           </div>
+          {msgStats && (
+            <>
+              <div>
+                <span className="text-gray-500">Messages recus</span>
+                <p className="font-medium">{msgStats.byDirection?.INCOMING || 0}</p>
+              </div>
+              <div>
+                <span className="text-gray-500">Messages envoyes</span>
+                <p className="font-medium">{msgStats.byDirection?.OUTGOING || 0}</p>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

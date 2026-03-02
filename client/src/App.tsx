@@ -5,6 +5,9 @@ import Dashboard from './pages/Dashboard';
 import TargetDetail from './pages/TargetDetail';
 import Sessions from './pages/Sessions';
 import Alerts from './pages/Alerts';
+import Messages from './pages/Messages';
+import Calls from './pages/Calls';
+import MediaGallery from './pages/MediaGallery';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 
@@ -24,6 +27,9 @@ function ProtectedLayout() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/targets/:id" element={<TargetDetail />} />
+            <Route path="/targets/:id/messages" element={<Messages />} />
+            <Route path="/targets/:id/calls" element={<Calls />} />
+            <Route path="/targets/:id/media" element={<MediaGallery />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/alerts" element={<Alerts />} />
           </Routes>

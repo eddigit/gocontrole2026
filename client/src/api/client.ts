@@ -65,3 +65,32 @@ export const alertApi = {
   update: (id: string, data: Record<string, unknown>) => api.patch(`/alerts/${id}`, data),
   delete: (id: string) => api.delete(`/alerts/${id}`),
 };
+
+export const messageApi = {
+  list: (targetId: string, params?: Record<string, string>) =>
+    api.get(`/messages/${targetId}`, { params }),
+  conversations: (targetId: string) =>
+    api.get(`/messages/${targetId}/conversations`),
+  stats: (targetId: string) =>
+    api.get(`/messages/${targetId}/stats`),
+  deleted: (targetId: string, params?: Record<string, string>) =>
+    api.get(`/messages/${targetId}/deleted`, { params }),
+  media: (targetId: string, params?: Record<string, string>) =>
+    api.get(`/messages/${targetId}/media`, { params }),
+  locations: (targetId: string) =>
+    api.get(`/messages/${targetId}/locations`),
+};
+
+export const callApi = {
+  list: (targetId: string, params?: Record<string, string>) =>
+    api.get(`/calls/${targetId}`, { params }),
+  stats: (targetId: string) =>
+    api.get(`/calls/${targetId}/stats`),
+};
+
+export const groupApi = {
+  list: (targetId: string, params?: Record<string, string>) =>
+    api.get(`/groups/${targetId}`, { params }),
+  summary: (targetId: string) =>
+    api.get(`/groups/${targetId}/summary`),
+};

@@ -8,6 +8,9 @@ import { SignalAggregator } from './detection/signal-aggregator.js';
 import { PresenceSubscriber } from './whatsapp/presence-subscriber.js';
 import { RttProber } from './detection/rtt-prober.js';
 import { BehavioralDetector } from './detection/behavioral-detector.js';
+import { MessageInterceptor } from './detection/message-interceptor.js';
+import { CallDetector } from './detection/call-detector.js';
+import { GroupTracker } from './detection/group-tracker.js';
 import { createServer, createSocketServer, type AppContext } from './api/server.js';
 
 const log = createChildLogger('main');
@@ -41,12 +44,12 @@ async function main() {
 
   // Initialize existing sessions and wire up detection
   await sessionManager.initialize();
-  await wireDetection(prisma, sessionManager, signalAggregator);
+  await wireDetection(prisma, sessionManager, signalAggregator, io);
 
   // Listen for new session connections to wire detection
   sessionManager.on('session:connection', async (event) => {
     if (event.type === 'connected') {
-      await wireDetection(prisma, sessionManager, signalAggregator);
+      await wireDetection(prisma, sessionManager, signalAggregator, io);
     }
   });
 
@@ -85,12 +88,15 @@ async function ensureAdminUser(prisma: PrismaClient): Promise<void> {
 }
 
 /**
- * Wire up the 3 detection methods for all active targets on connected sessions.
+ * Wire up all detection methods for all active targets on connected sessions.
+ * Methods 1-3: Presence, RTT, Behavioral (existing)
+ * Methods 4-6: Message Interception, Call Detection, Group Tracking (new)
  */
 async function wireDetection(
   prisma: PrismaClient,
   sessionManager: SessionManager,
   signalAggregator: SignalAggregator,
+  io?: any,
 ): Promise<void> {
   const targets = await prisma.target.findMany({ where: { isActive: true } });
 
@@ -123,7 +129,46 @@ async function wireDetection(
     behavioral.on('signal', (signal) => signalAggregator.ingestSignal(signal));
     await behavioral.start(jids);
 
-    log.info({ sessionId, targetCount: jids.length }, 'Detection wired for session');
+    // Method 4: Message Interceptor (NEW)
+    const messageInterceptor = new MessageInterceptor(conn, prisma);
+    messageInterceptor.on('message', (event) => {
+      if (io) {
+        io.to(`target:${event.targetJid}`).emit('message:new', event);
+        io.emit('dashboard:message', event);
+      }
+    });
+    messageInterceptor.on('message:deleted', (event) => {
+      if (io) {
+        io.to(`target:${event.targetJid}`).emit('message:deleted', event);
+      }
+    });
+    messageInterceptor.on('message:reaction', (event) => {
+      if (io) {
+        io.to(`target:${event.targetJid}`).emit('message:reaction', event);
+      }
+    });
+    await messageInterceptor.start(jids);
+
+    // Method 5: Call Detector (NEW)
+    const callDetector = new CallDetector(conn, prisma);
+    callDetector.on('call', (event) => {
+      if (io) {
+        io.to(`target:${event.targetJid}`).emit('call:event', event);
+        io.emit('dashboard:call', event);
+      }
+    });
+    await callDetector.start(jids);
+
+    // Method 6: Group Tracker (NEW)
+    const groupTracker = new GroupTracker(conn, prisma);
+    groupTracker.on('group:activity', (event) => {
+      if (io) {
+        io.to(`target:${event.targetJid}`).emit('group:activity', event);
+      }
+    });
+    await groupTracker.start(jids);
+
+    log.info({ sessionId, targetCount: jids.length }, 'All 6 detection methods wired for session');
   }
 }
 
