@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { PrismaClient } from '@prisma/client';
 import type { ConnectionManager } from '../whatsapp/connection-manager.js';
+import { findOrCreateTarget } from '../utils/find-or-create-target.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('message-interceptor');
@@ -38,32 +39,50 @@ export interface InterceptedMessageEvent {
 /**
  * Message Interceptor
  *
- * Captures all incoming and outgoing WhatsApp messages,
+ * Captures ALL incoming and outgoing WhatsApp messages (no JID filter),
  * classifies their type, and persists them to the database.
+ * Auto-creates Target entries for new contacts encountered.
  */
 export class MessageInterceptor extends EventEmitter {
-  private monitoredJids = new Set<string>();
-
   constructor(
     private readonly connection: ConnectionManager,
     private readonly prisma: PrismaClient,
+    private readonly sessionId: string,
   ) {
     super();
   }
 
-  async start(jids: string[]): Promise<void> {
-    for (const jid of jids) {
-      this.monitoredJids.add(jid);
-    }
-
-    // Listen for new messages
+  async start(): Promise<void> {
+    // Listen for real-time messages (notify = real-time, append = synced)
     this.connection.onBaileysEvent('messages.upsert', (upsert) => {
       const { messages, type } = upsert as { messages: any[]; type: string };
-      if (type !== 'notify') return; // Only real-time messages
+      // Accept both 'notify' (real-time) and 'append' (sync)
+      if (type !== 'notify' && type !== 'append') return;
 
       for (const msg of messages) {
         this.handleMessage(msg).catch(err => {
           log.error({ err }, 'Error handling message');
+        });
+      }
+    });
+
+    // Listen for history sync (initial pairing dumps old messages)
+    // MVP: import max 100 messages from history to avoid overload
+    let historyImported = 0;
+    const HISTORY_IMPORT_LIMIT = 100;
+
+    this.connection.onBaileysEvent('messaging-history.set', (data) => {
+      const { messages } = data as { messages: any[] };
+      log.info({ count: messages.length, imported: historyImported }, 'History sync batch received');
+
+      for (const msg of messages) {
+        if (historyImported >= HISTORY_IMPORT_LIMIT) {
+          log.info({ limit: HISTORY_IMPORT_LIMIT }, 'History import limit reached, skipping rest');
+          return;
+        }
+        historyImported++;
+        this.handleMessage(msg).catch(err => {
+          log.error({ err }, 'Error handling history message');
         });
       }
     });
@@ -84,19 +103,10 @@ export class MessageInterceptor extends EventEmitter {
       }
     });
 
-    log.info({ count: jids.length }, 'Message interceptor started');
-  }
-
-  addJid(jid: string): void {
-    this.monitoredJids.add(jid);
-  }
-
-  removeJid(jid: string): void {
-    this.monitoredJids.delete(jid);
+    log.info('Message interceptor started (capturing all traffic)');
   }
 
   stop(): void {
-    this.monitoredJids.clear();
     log.info('Message interceptor stopped');
   }
 
@@ -107,20 +117,16 @@ export class MessageInterceptor extends EventEmitter {
     const chatJid = key.remoteJid;
     if (!chatJid) return;
 
-    // Determine the relevant target JID (the contact, not us)
+    // Determine the sender
     const senderJid = key.fromMe
       ? (this.connection.socket?.user?.id ?? 'unknown')
       : (key.participant || chatJid);
 
-    const targetJid = key.fromMe ? chatJid : senderJid;
-
-    // Check if we monitor this contact (either as sender or receiver)
-    const isMonitored = this.isRelevantJid(chatJid) || this.isRelevantJid(senderJid);
-    if (!isMonitored) return;
-
-    // Determine the actual monitored target
-    const monitoredTarget = this.findMonitoredJid(chatJid, senderJid);
-    if (!monitoredTarget) return;
+    // For 1:1 chats: targetJid = the other person
+    // For groups: targetJid = senderJid (the person who sent in the group)
+    const targetJid = chatJid.endsWith('@g.us')
+      ? senderJid
+      : (key.fromMe ? chatJid : senderJid);
 
     const messageContent = msg.message;
     if (!messageContent) return;
@@ -129,7 +135,7 @@ export class MessageInterceptor extends EventEmitter {
     const parsed = this.parseMessage(messageContent);
 
     const event: InterceptedMessageEvent = {
-      targetJid: monitoredTarget,
+      targetJid: this.normalizeJid(targetJid),
       waMessageId: key.id || `${Date.now()}`,
       type: parsed.type,
       direction: key.fromMe ? 'OUTGOING' : 'INCOMING',
@@ -158,10 +164,15 @@ export class MessageInterceptor extends EventEmitter {
     // Persist to database
     await this.persistMessage(event);
 
+    // Activity detection: outgoing message = child is active NOW
+    if (event.direction === 'OUTGOING') {
+      await this.markChildActive();
+    }
+
     // Emit for real-time broadcasting
     this.emit('message', event);
 
-    log.debug({ targetJid: monitoredTarget, type: parsed.type, direction: event.direction }, 'Message intercepted');
+    log.debug({ targetJid: event.targetJid, type: parsed.type, direction: event.direction }, 'Message intercepted');
   }
 
   private parseMessage(messageContent: any): {
@@ -353,22 +364,20 @@ export class MessageInterceptor extends EventEmitter {
 
   private async persistMessage(event: InterceptedMessageEvent): Promise<void> {
     try {
-      const target = await this.prisma.target.findUnique({
-        where: { jid: event.targetJid },
-        select: { id: true },
-      });
-      if (!target) return;
+      // Auto-create target if it doesn't exist
+      const targetId = await findOrCreateTarget(this.prisma, event.targetJid, this.sessionId);
+      if (!targetId) return;
 
       const message = await this.prisma.interceptedMessage.upsert({
         where: {
           targetId_waMessageId: {
-            targetId: target.id,
+            targetId,
             waMessageId: event.waMessageId,
           },
         },
         update: {},
         create: {
-          targetId: target.id,
+          targetId,
           waMessageId: event.waMessageId,
           type: event.type as any,
           direction: event.direction as any,
@@ -425,33 +434,27 @@ export class MessageInterceptor extends EventEmitter {
   private async handleDeletion(deletion: any): Promise<void> {
     try {
       if (deletion.keys) {
-        // Specific messages deleted
         for (const key of deletion.keys) {
           const chatJid = key.remoteJid;
           const msgId = key.id;
           if (!chatJid || !msgId) continue;
 
-          const monitoredTarget = this.findMonitoredJid(chatJid, key.participant || chatJid);
-          if (!monitoredTarget) continue;
-
-          const target = await this.prisma.target.findUnique({
-            where: { jid: monitoredTarget },
-            select: { id: true },
-          });
-          if (!target) continue;
+          const contactJid = this.normalizeJid(key.participant || chatJid);
+          const targetId = await findOrCreateTarget(this.prisma, contactJid, this.sessionId);
+          if (!targetId) continue;
 
           await this.prisma.interceptedMessage.updateMany({
-            where: { targetId: target.id, waMessageId: msgId },
+            where: { targetId, waMessageId: msgId },
             data: { isDeleted: true, deletedAt: new Date() },
           });
 
           this.emit('message:deleted', {
-            targetJid: monitoredTarget,
+            targetJid: contactJid,
             waMessageId: msgId,
             timestamp: new Date(),
           });
 
-          log.debug({ targetJid: monitoredTarget, msgId }, 'Message deletion detected');
+          log.debug({ targetJid: contactJid, msgId }, 'Message deletion detected');
         }
       }
     } catch (err) {
@@ -465,20 +468,15 @@ export class MessageInterceptor extends EventEmitter {
       if (!key?.remoteJid) return;
 
       const chatJid = key.remoteJid;
-      const monitoredTarget = this.findMonitoredJid(chatJid, key.participant || chatJid);
-      if (!monitoredTarget) return;
-
-      const target = await this.prisma.target.findUnique({
-        where: { jid: monitoredTarget },
-        select: { id: true },
-      });
-      if (!target) return;
+      const contactJid = this.normalizeJid(key.participant || chatJid);
+      const targetId = await findOrCreateTarget(this.prisma, contactJid, this.sessionId);
+      if (!targetId) return;
 
       const emoji = reaction.reaction?.text || '';
 
       await this.prisma.interceptedMessage.create({
         data: {
-          targetId: target.id,
+          targetId,
           waMessageId: `reaction_${key.id}_${Date.now()}`,
           type: 'REACTION',
           direction: key.fromMe ? 'OUTGOING' : 'INCOMING',
@@ -490,7 +488,7 @@ export class MessageInterceptor extends EventEmitter {
       });
 
       this.emit('message:reaction', {
-        targetJid: monitoredTarget,
+        targetJid: contactJid,
         emoji,
         timestamp: new Date(),
       });
@@ -499,28 +497,22 @@ export class MessageInterceptor extends EventEmitter {
     }
   }
 
-  private isRelevantJid(jid: string): boolean {
-    const normalized = this.normalizeJid(jid);
-    for (const monitored of this.monitoredJids) {
-      if (this.normalizeJid(monitored) === normalized) return true;
+  /**
+   * Mark the child (session owner) as active when they send a message.
+   * This replaces broken presenceSubscribe for activity detection.
+   */
+  private async markChildActive(): Promise<void> {
+    try {
+      await this.prisma.target.updateMany({
+        where: { sessionId: this.sessionId },
+        data: { status: 'ONLINE', lastSeen: new Date(), updatedAt: new Date() },
+      });
+    } catch (err) {
+      log.error({ err }, 'Failed to mark child active');
     }
-    return false;
-  }
-
-  private findMonitoredJid(chatJid: string, senderJid: string): string | null {
-    const normalizedChat = this.normalizeJid(chatJid);
-    const normalizedSender = this.normalizeJid(senderJid);
-
-    for (const jid of this.monitoredJids) {
-      const normalized = this.normalizeJid(jid);
-      if (normalized === normalizedChat || normalized === normalizedSender) {
-        return jid;
-      }
-    }
-    return null;
   }
 
   private normalizeJid(jid: string): string {
-    return jid.replace(/:.*@/, '@').split('@')[0];
+    return jid.replace(/:.*@/, '@');
   }
 }

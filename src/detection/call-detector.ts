@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { PrismaClient } from '@prisma/client';
 import type { ConnectionManager } from '../whatsapp/connection-manager.js';
+import { findOrCreateTarget } from '../utils/find-or-create-target.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('call-detector');
@@ -19,26 +20,22 @@ export interface CallEventData {
 /**
  * Call Detector
  *
- * Detects incoming and outgoing WhatsApp voice/video calls
- * via the 'call' Baileys event.
+ * Detects ALL incoming and outgoing WhatsApp voice/video calls
+ * via the 'call' Baileys event. No JID filter — captures everything.
  */
 export class CallDetector extends EventEmitter {
-  private monitoredJids = new Set<string>();
   private activeCallTimers = new Map<string, NodeJS.Timeout>();
   private callStartTimes = new Map<string, Date>();
 
   constructor(
     private readonly connection: ConnectionManager,
     private readonly prisma: PrismaClient,
+    private readonly sessionId: string,
   ) {
     super();
   }
 
-  async start(jids: string[]): Promise<void> {
-    for (const jid of jids) {
-      this.monitoredJids.add(jid);
-    }
-
+  async start(): Promise<void> {
     this.connection.onBaileysEvent('call', (calls) => {
       for (const call of calls as any[]) {
         this.handleCall(call).catch(err => {
@@ -47,15 +44,7 @@ export class CallDetector extends EventEmitter {
       }
     });
 
-    log.info({ count: jids.length }, 'Call detector started');
-  }
-
-  addJid(jid: string): void {
-    this.monitoredJids.add(jid);
-  }
-
-  removeJid(jid: string): void {
-    this.monitoredJids.delete(jid);
+    log.info('Call detector started (capturing all calls)');
   }
 
   stop(): void {
@@ -64,7 +53,6 @@ export class CallDetector extends EventEmitter {
     }
     this.activeCallTimers.clear();
     this.callStartTimes.clear();
-    this.monitoredJids.clear();
     log.info('Call detector stopped');
   }
 
@@ -72,9 +60,7 @@ export class CallDetector extends EventEmitter {
     const callerJid = call.from;
     if (!callerJid) return;
 
-    // Check if the caller is a monitored target
-    const monitoredTarget = this.findMonitoredJid(callerJid, call.chatId);
-    if (!monitoredTarget) return;
+    const normalizedCaller = this.normalizeJid(callerJid);
 
     const statusMap: Record<string, string> = {
       offer: 'OFFER',
@@ -107,9 +93,9 @@ export class CallDetector extends EventEmitter {
       : status;
 
     const event: CallEventData = {
-      targetJid: monitoredTarget,
+      targetJid: normalizedCaller,
       waCallId: callId,
-      callerJid: this.normalizeJid(callerJid),
+      callerJid: normalizedCaller,
       callType: call.isVideo ? 'VIDEO' : 'VOICE',
       status: finalStatus,
       isGroup: !!call.isGroup,
@@ -124,7 +110,7 @@ export class CallDetector extends EventEmitter {
     this.emit('call', event);
 
     log.info({
-      targetJid: monitoredTarget,
+      targetJid: normalizedCaller,
       callType: event.callType,
       status: event.status,
     }, 'Call event detected');
@@ -132,15 +118,12 @@ export class CallDetector extends EventEmitter {
 
   private async persistCall(event: CallEventData, duration?: number): Promise<void> {
     try {
-      const target = await this.prisma.target.findUnique({
-        where: { jid: event.targetJid },
-        select: { id: true },
-      });
-      if (!target) return;
+      const targetId = await findOrCreateTarget(this.prisma, event.targetJid, this.sessionId);
+      if (!targetId) return;
 
       await this.prisma.callEvent.create({
         data: {
-          targetId: target.id,
+          targetId,
           waCallId: event.waCallId,
           callerJid: event.callerJid,
           callType: event.callType as any,
@@ -156,26 +139,7 @@ export class CallDetector extends EventEmitter {
     }
   }
 
-  private findMonitoredJid(callerJid: string, chatId?: string): string | null {
-    const normalizedCaller = this.normalizeJid(callerJid);
-
-    for (const jid of this.monitoredJids) {
-      const normalized = this.normalizeJid(jid);
-      if (normalized === normalizedCaller) return jid;
-    }
-
-    if (chatId) {
-      const normalizedChat = this.normalizeJid(chatId);
-      for (const jid of this.monitoredJids) {
-        const normalized = this.normalizeJid(jid);
-        if (normalized === normalizedChat) return jid;
-      }
-    }
-
-    return null;
-  }
-
   private normalizeJid(jid: string): string {
-    return jid.replace(/:.*@/, '@').split('@')[0];
+    return jid.replace(/:.*@/, '@');
   }
 }

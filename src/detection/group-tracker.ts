@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { PrismaClient } from '@prisma/client';
 import type { ConnectionManager } from '../whatsapp/connection-manager.js';
+import { findOrCreateTarget } from '../utils/find-or-create-target.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('group-tracker');
@@ -19,26 +20,20 @@ export interface GroupActivityEvent {
 /**
  * Group Activity Tracker
  *
- * Monitors WhatsApp group events:
+ * Monitors ALL WhatsApp group events (no JID filter):
  * - Participant changes (join/leave/promote/demote)
  * - Group metadata changes (subject, description, icon)
- * - Group settings changes
  */
 export class GroupTracker extends EventEmitter {
-  private monitoredJids = new Set<string>();
-
   constructor(
     private readonly connection: ConnectionManager,
     private readonly prisma: PrismaClient,
+    private readonly sessionId: string,
   ) {
     super();
   }
 
-  async start(jids: string[]): Promise<void> {
-    for (const jid of jids) {
-      this.monitoredJids.add(jid);
-    }
-
+  async start(): Promise<void> {
     // Listen for group participant changes
     this.connection.onBaileysEvent('group-participants.update', (update) => {
       this.handleParticipantUpdate(update as any).catch(err => {
@@ -55,19 +50,10 @@ export class GroupTracker extends EventEmitter {
       }
     });
 
-    log.info({ count: jids.length }, 'Group tracker started');
-  }
-
-  addJid(jid: string): void {
-    this.monitoredJids.add(jid);
-  }
-
-  removeJid(jid: string): void {
-    this.monitoredJids.delete(jid);
+    log.info('Group tracker started (capturing all group activity)');
   }
 
   stop(): void {
-    this.monitoredJids.clear();
     log.info('Group tracker stopped');
   }
 
@@ -86,25 +72,25 @@ export class GroupTracker extends EventEmitter {
     };
 
     for (const participant of update.participants) {
-      // Check if the participant is someone we monitor
-      const monitoredTarget = this.findMonitoredJid(participant);
-      if (!monitoredTarget) continue;
+      const normalizedJid = this.normalizeJid(participant);
+      const targetId = await findOrCreateTarget(this.prisma, normalizedJid, this.sessionId);
+      if (!targetId) continue;
 
       const event: GroupActivityEvent = {
-        targetJid: monitoredTarget,
+        targetJid: normalizedJid,
         groupJid,
         groupName: null,
         eventType: actionMap[update.action] || 'SETTINGS_CHANGED',
         actorJid: null,
-        affectedJid: this.normalizeJid(participant),
+        affectedJid: normalizedJid,
         detail: `${update.action} dans le groupe`,
         timestamp: new Date(),
       };
 
-      await this.persistGroupActivity(event);
+      await this.persistGroupActivity(event, targetId);
       this.emit('group:activity', event);
 
-      log.debug({ targetJid: monitoredTarget, groupJid, action: update.action }, 'Group participant event');
+      log.debug({ targetJid: normalizedJid, groupJid, action: update.action }, 'Group participant event');
     }
   }
 
@@ -112,57 +98,59 @@ export class GroupTracker extends EventEmitter {
     const groupJid = update.id;
     if (!groupJid) return;
 
-    // We need to check if any of our monitored targets are in this group
-    // For simplicity, we store all group events and filter later
-    const events: GroupActivityEvent[] = [];
+    const events: { eventType: string; detail: string; actorJid: string | null }[] = [];
 
     if (update.subject) {
       events.push({
-        targetJid: '', // Will be filled per monitored target
-        groupJid,
-        groupName: update.subject,
         eventType: 'SUBJECT_CHANGED',
         actorJid: update.subjectOwner || null,
-        affectedJid: null,
         detail: `Sujet change: ${update.subject}`,
-        timestamp: new Date(),
       });
     }
 
     if (update.desc) {
       events.push({
-        targetJid: '',
-        groupJid,
-        groupName: update.subject || null,
         eventType: 'DESCRIPTION_CHANGED',
         actorJid: update.descOwner || null,
-        affectedJid: null,
         detail: `Description modifiee`,
-        timestamp: new Date(),
       });
     }
 
-    // Persist for all monitored targets (they might be in the group)
-    for (const event of events) {
-      for (const jid of this.monitoredJids) {
-        const targetEvent = { ...event, targetJid: jid };
-        await this.persistGroupActivity(targetEvent);
-        this.emit('group:activity', targetEvent);
-      }
+    // Store group updates linked to the session owner (the child)
+    // We use sessionId to find the child's own JID target
+    for (const ev of events) {
+      // Use session's own phone as the target (the child is in the group)
+      const session = await this.prisma.session.findUnique({
+        where: { id: this.sessionId },
+        select: { phoneNumber: true },
+      });
+      if (!session?.phoneNumber) continue;
+
+      const childJid = `${session.phoneNumber}@s.whatsapp.net`;
+      const targetId = await findOrCreateTarget(this.prisma, childJid, this.sessionId);
+      if (!targetId) continue;
+
+      const event: GroupActivityEvent = {
+        targetJid: childJid,
+        groupJid,
+        groupName: update.subject || null,
+        eventType: ev.eventType,
+        actorJid: ev.actorJid,
+        affectedJid: null,
+        detail: ev.detail,
+        timestamp: new Date(),
+      };
+
+      await this.persistGroupActivity(event, targetId);
+      this.emit('group:activity', event);
     }
   }
 
-  private async persistGroupActivity(event: GroupActivityEvent): Promise<void> {
+  private async persistGroupActivity(event: GroupActivityEvent, targetId: string): Promise<void> {
     try {
-      const target = await this.prisma.target.findUnique({
-        where: { jid: event.targetJid },
-        select: { id: true },
-      });
-      if (!target) return;
-
       await this.prisma.groupActivity.create({
         data: {
-          targetId: target.id,
+          targetId,
           groupJid: event.groupJid,
           groupName: event.groupName,
           eventType: event.eventType as any,
@@ -177,15 +165,7 @@ export class GroupTracker extends EventEmitter {
     }
   }
 
-  private findMonitoredJid(jid: string): string | null {
-    const normalized = this.normalizeJid(jid);
-    for (const monitored of this.monitoredJids) {
-      if (this.normalizeJid(monitored) === normalized) return monitored;
-    }
-    return null;
-  }
-
   private normalizeJid(jid: string): string {
-    return jid.replace(/:.*@/, '@').split('@')[0];
+    return jid.replace(/:.*@/, '@');
   }
 }

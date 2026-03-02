@@ -19,6 +19,7 @@ const log = createChildLogger('connection-manager');
 
 export type ConnectionEvent =
   | { type: 'qr'; qr: string }
+  | { type: 'pairing_code'; code: string }
   | { type: 'connected'; phoneNumber?: string }
   | { type: 'disconnected'; reason: string }
   | { type: 'reconnecting'; attempt: number }
@@ -47,7 +48,7 @@ export class ConnectionManager extends EventEmitter {
     return this.sock?.user !== undefined;
   }
 
-  async connect(): Promise<void> {
+  async connect(pairingPhoneNumber?: string): Promise<void> {
     this.isClosing = false;
 
     // Clean up any existing socket before creating a new one (prevents conflict loops)
@@ -58,12 +59,15 @@ export class ConnectionManager extends EventEmitter {
       this.sock = null;
     }
 
-    log.info({ sessionId: this.sessionId }, 'Starting WhatsApp connection');
+    log.info({ sessionId: this.sessionId, pairingPhoneNumber }, 'Starting WhatsApp connection');
 
     const { state, saveCreds } = await usePostgresAuthState(this.prisma, this.sessionId);
     const { version } = await fetchLatestBaileysVersion();
 
     const msgCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+
+    // 60 days in seconds for history sync limit (MVP)
+    const SIXTY_DAYS_AGO = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 60;
 
     this.sock = makeWASocket({
       version,
@@ -71,8 +75,12 @@ export class ConnectionManager extends EventEmitter {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, log as any),
       },
-      browser: Browsers.ubuntu('GO Controle'),
+      browser: Browsers.macOS('Desktop'),
       markOnlineOnConnect: false,
+      syncFullHistory: true,
+      shouldSyncHistoryMessage: (msg: any) => {
+        return (msg.messageTimestamp ?? 0) > SIXTY_DAYS_AGO;
+      },
       logger: log as any,
       generateHighQualityLinkPreview: false,
       msgRetryCounterCache: msgCache,
@@ -86,6 +94,20 @@ export class ConnectionManager extends EventEmitter {
     this.sock.ev.on('connection.update', (update) => {
       this.handleConnectionUpdate(update);
     });
+
+    // If a phone number was provided and this is a fresh session, request a pairing code
+    if (pairingPhoneNumber && !state.creds.registered) {
+      // Wait briefly for the socket to be ready before requesting pairing code
+      setTimeout(async () => {
+        try {
+          const code = await this.sock!.requestPairingCode(pairingPhoneNumber);
+          log.info({ sessionId: this.sessionId, code }, 'Pairing code generated');
+          this.emit('connection', { type: 'pairing_code', code } satisfies ConnectionEvent);
+        } catch (err) {
+          log.error({ err, sessionId: this.sessionId }, 'Failed to request pairing code');
+        }
+      }, 3000);
+    }
 
     // Start health check
     this.startHealthCheck();

@@ -15,34 +15,42 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // POST /api/sessions
+  // If phoneNumber is provided, uses pairing code instead of QR
   fastify.post<{
-    Body: { name: string };
+    Body: { name: string; phoneNumber?: string };
   }>('/', async (request) => {
-    const { name } = request.body;
+    const { name, phoneNumber } = request.body;
     const sessionId = await sessionManager.createSession(name);
-    const conn = await sessionManager.startSession(sessionId);
+    const conn = await sessionManager.startSession(sessionId, phoneNumber);
 
-    // Wait for QR code or connection (up to 30s)
-    const qr = await new Promise<string | null>((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 30_000);
+    // Wait for QR code, pairing code, or connection (up to 30s)
+    const result = await new Promise<{ qr?: string; pairingCode?: string }>((resolve) => {
+      const timeout = setTimeout(() => resolve({}), 30_000);
 
       conn.on('connection', (event) => {
         if (event.type === 'qr') {
           clearTimeout(timeout);
-          resolve(event.qr);
+          resolve({ qr: event.qr });
+        } else if (event.type === 'pairing_code') {
+          clearTimeout(timeout);
+          resolve({ pairingCode: event.code });
         } else if (event.type === 'connected') {
           clearTimeout(timeout);
-          resolve(null);
+          resolve({});
         }
       });
     });
 
     let qrDataUrl: string | null = null;
-    if (qr) {
-      qrDataUrl = await QRCode.toDataURL(qr);
+    if (result.qr) {
+      qrDataUrl = await QRCode.toDataURL(result.qr);
     }
 
-    return { sessionId, qr: qrDataUrl };
+    return {
+      sessionId,
+      qr: qrDataUrl,
+      pairingCode: result.pairingCode || null,
+    };
   });
 
   // GET /api/sessions/:id
@@ -93,6 +101,42 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
 
     const qrDataUrl = await QRCode.toDataURL(qr);
     return { qr: qrDataUrl, connected: false };
+  });
+
+  // POST /api/sessions/:id/pairing-code — Request a pairing code for an existing session
+  fastify.post<{
+    Params: { id: string };
+    Body: { phoneNumber: string };
+  }>('/:id/pairing-code', async (request, reply) => {
+    const { phoneNumber } = request.body;
+    if (!phoneNumber) {
+      return reply.status(400).send({ error: 'phoneNumber is required' });
+    }
+
+    // Stop existing connection and restart with pairing code
+    await sessionManager.stopSession(request.params.id);
+    const conn = await sessionManager.startSession(request.params.id, phoneNumber);
+
+    // Wait for pairing code
+    const code = await new Promise<string | null>((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 30_000);
+
+      conn.on('connection', (event) => {
+        if (event.type === 'pairing_code') {
+          clearTimeout(timeout);
+          resolve(event.code);
+        } else if (event.type === 'connected') {
+          clearTimeout(timeout);
+          resolve(null);
+        }
+      });
+    });
+
+    if (!code) {
+      return { pairingCode: null, connected: conn.isConnected };
+    }
+
+    return { pairingCode: code };
   });
 
   // POST /api/sessions/:id/start

@@ -56,7 +56,7 @@ export class SessionManager extends EventEmitter {
   /**
    * Start (connect) a session.
    */
-  async startSession(sessionId: string): Promise<ConnectionManager> {
+  async startSession(sessionId: string, pairingPhoneNumber?: string): Promise<ConnectionManager> {
     if (this.connections.has(sessionId)) {
       log.warn({ sessionId }, 'Session already started');
       return this.connections.get(sessionId)!;
@@ -70,7 +70,7 @@ export class SessionManager extends EventEmitter {
     });
 
     this.connections.set(sessionId, conn);
-    await conn.connect();
+    await conn.connect(pairingPhoneNumber);
 
     return conn;
   }

