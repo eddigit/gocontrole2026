@@ -54,12 +54,13 @@ export class PresenceSubscriber extends EventEmitter {
    * Subscribe to presence updates for a single JID.
    */
   async subscribe(jid: string): Promise<void> {
+    // Always track the JID so polling retries and incoming events are not filtered out
+    this.subscribedJids.add(jid);
     try {
       await this.connection.presenceSubscribe(jid);
-      this.subscribedJids.add(jid);
-      log.debug({ jid }, 'Subscribed to presence');
+      log.info({ jid }, 'Subscribed to presence');
     } catch (err) {
-      log.error({ err, jid }, 'Failed to subscribe to presence');
+      log.warn({ err, jid }, 'Failed to subscribe to presence (will retry via polling)');
     }
   }
 
@@ -100,7 +101,7 @@ export class PresenceSubscriber extends EventEmitter {
       timestamp: new Date(),
     };
 
-    log.debug({ jid, state: signal.state }, 'Presence update received');
+    log.info({ jid, state: signal.state }, 'Presence update received');
     this.emit('signal', signal);
   }
 
