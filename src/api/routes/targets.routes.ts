@@ -3,6 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { authenticate } from '../middleware/auth.js';
 import { phoneToJid, formatPhone } from '../../utils/jid.js';
 import type { SessionManager } from '../../whatsapp/session-manager.js';
+import type { DetectionManager } from '../../detection/detection-manager.js';
 
 export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
   const { prisma, sessionManager, signalAggregator } = fastify.appContext;
@@ -82,13 +83,17 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
       },
     });
 
-    // Register with aggregator
-    signalAggregator.addTarget(jid);
-
-    // Subscribe to presence on the assigned session
-    const conn = sessionManager.getConnection(sessionId);
-    if (conn?.isConnected) {
-      await conn.presenceSubscribe(jid).catch(() => {});
+    // Wire target into the full detection pipeline (all 6 methods)
+    const detectionManager = (fastify as any).detectionManager as DetectionManager | undefined;
+    if (detectionManager) {
+      await detectionManager.addTarget(sessionId, jid);
+    } else {
+      // Fallback: at minimum register with aggregator + presence subscribe
+      signalAggregator.addTarget(jid);
+      const conn = sessionManager.getConnection(sessionId);
+      if (conn?.isConnected) {
+        await conn.presenceSubscribe(jid).catch(() => {});
+      }
     }
 
     return { target };
@@ -208,8 +213,13 @@ export async function targetRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'Target not found' });
     }
 
-    // Remove from aggregator
-    signalAggregator.removeTarget(target.jid);
+    // Remove from detection pipeline
+    const dm = (fastify as any).detectionManager as DetectionManager | undefined;
+    if (dm) {
+      dm.removeTarget(target.jid);
+    } else {
+      signalAggregator.removeTarget(target.jid);
+    }
 
     // Delete from DB (cascading deletes events)
     await prisma.presenceEvent.deleteMany({ where: { targetId: target.id } });

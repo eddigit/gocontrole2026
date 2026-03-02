@@ -1,5 +1,4 @@
 import bcrypt from 'bcryptjs';
-import jwt from '@fastify/jwt';
 
 const SALT_ROUNDS = 12;
 
