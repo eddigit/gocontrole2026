@@ -40,7 +40,7 @@ declare module '@fastify/jwt' {
 
 export async function createServer(context: AppContext) {
   const fastify = Fastify({
-    logger: log as any,
+    loggerInstance: log,
   });
 
   // Decorate with app context
