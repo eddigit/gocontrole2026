@@ -1,13 +1,15 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Smartphone, Radio, Bell,
-  MessageSquare, PhoneCall, Image, Shield
+  MessageSquare, PhoneCall, Image, Shield,
+  Database, FileText, Scale
 } from 'lucide-react';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/sessions', label: 'Sessions WhatsApp', icon: Radio },
   { to: '/alerts', label: 'Alertes', icon: Bell },
+  { to: '/piste', label: 'API PISTE', icon: Database },
 ];
 
 const featureItems = [
@@ -59,12 +61,24 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      <div className="p-4 border-t border-gray-700">
+      {/* Footer — Legal + Status */}
+      <div className="p-4 border-t border-gray-700 space-y-2">
+        <NavLink
+          to="/legal"
+          className={({ isActive }) =>
+            `flex items-center gap-2 text-xs transition-colors ${
+              isActive ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
+            }`
+          }
+        >
+          <Scale size={14} />
+          <span>CGU & Confidentialite</span>
+        </NavLink>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <Shield size={14} className="text-green-500" />
           <span>6 modules actifs</span>
         </div>
-        <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+        <div className="flex items-center gap-2 text-xs text-gray-500">
           <Smartphone size={14} />
           <span>Monitoring en cours</span>
         </div>

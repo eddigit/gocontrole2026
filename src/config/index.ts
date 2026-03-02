@@ -12,6 +12,10 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email().default('admin@gocontrole.local'),
   ADMIN_PASSWORD: z.string().min(6).default('admin123'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  // API PISTE (gouv.fr)
+  PISTE_CLIENT_ID: z.string().default(''),
+  PISTE_CLIENT_SECRET: z.string().default(''),
+  PISTE_SANDBOX: z.string().default('true'),
 });
 
 export type Env = z.infer<typeof envSchema>;

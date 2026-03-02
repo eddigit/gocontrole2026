@@ -94,3 +94,19 @@ export const groupApi = {
   summary: (targetId: string) =>
     api.get(`/groups/${targetId}/summary`),
 };
+
+export const legalApi = {
+  cgu: () => api.get('/legal/cgu'),
+  privacy: () => api.get('/legal/privacy'),
+  consentStatus: () => api.get('/legal/consent-status'),
+  accept: () => api.post('/legal/accept'),
+};
+
+export const pisteApi = {
+  status: () => api.get('/piste/status'),
+  bodacc: (params: Record<string, string>) => api.get('/piste/bodacc', { params }),
+  legifranceSearch: (data: { recherche: string; fond?: string; page?: number; pageSize?: number }) =>
+    api.post('/piste/legifrance/search', data),
+  judilibreSearch: (params: Record<string, string>) => api.get('/piste/judilibre/search', { params }),
+  judilibreDecision: (id: string) => api.get('/piste/judilibre/decision', { params: { id } }),
+};

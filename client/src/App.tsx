@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import Login from './pages/Login';
@@ -8,34 +9,45 @@ import Alerts from './pages/Alerts';
 import Messages from './pages/Messages';
 import Calls from './pages/Calls';
 import MediaGallery from './pages/MediaGallery';
+import Legal from './pages/Legal';
+import Piste from './pages/Piste';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
+import ConsentModal from './components/ConsentModal';
 
 function ProtectedLayout() {
   const { token, logout } = useAuth();
+  const [consentGiven, setConsentGiven] = useState(false);
 
   if (!token) {
     return <Navigate to="/login" replace />;
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <Header onLogout={logout} />
-        <main className="flex-1 overflow-y-auto p-6">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/targets/:id" element={<TargetDetail />} />
-            <Route path="/targets/:id/messages" element={<Messages />} />
-            <Route path="/targets/:id/calls" element={<Calls />} />
-            <Route path="/targets/:id/media" element={<MediaGallery />} />
-            <Route path="/sessions" element={<Sessions />} />
-            <Route path="/alerts" element={<Alerts />} />
-          </Routes>
-        </main>
+    <>
+      {/* Consent modal blocks access until CGU/Privacy are accepted */}
+      {!consentGiven && <ConsentModal onAccepted={() => setConsentGiven(true)} />}
+
+      <div className="flex h-screen bg-gray-50">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Header onLogout={logout} />
+          <main className="flex-1 overflow-y-auto p-6">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/targets/:id" element={<TargetDetail />} />
+              <Route path="/targets/:id/messages" element={<Messages />} />
+              <Route path="/targets/:id/calls" element={<Calls />} />
+              <Route path="/targets/:id/media" element={<MediaGallery />} />
+              <Route path="/sessions" element={<Sessions />} />
+              <Route path="/alerts" element={<Alerts />} />
+              <Route path="/legal" element={<Legal />} />
+              <Route path="/piste" element={<Piste />} />
+            </Routes>
+          </main>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

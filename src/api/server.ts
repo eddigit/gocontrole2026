@@ -16,6 +16,8 @@ import { healthRoutes } from './routes/health.routes.js';
 import { messageRoutes } from './routes/messages.routes.js';
 import { callRoutes } from './routes/calls.routes.js';
 import { groupRoutes } from './routes/groups.routes.js';
+import { legalRoutes } from './routes/legal.routes.js';
+import { pisteRoutes } from './routes/piste.routes.js';
 import type { PrismaClient } from '@prisma/client';
 import type { SessionManager } from '../whatsapp/session-manager.js';
 import type { SignalAggregator } from '../detection/signal-aggregator.js';
@@ -71,6 +73,8 @@ export async function createServer(context: AppContext) {
   await fastify.register(messageRoutes, { prefix: '/api/messages' });
   await fastify.register(callRoutes, { prefix: '/api/calls' });
   await fastify.register(groupRoutes, { prefix: '/api/groups' });
+  await fastify.register(legalRoutes, { prefix: '/api/legal' });
+  await fastify.register(pisteRoutes, { prefix: '/api/piste' });
 
   // Serve React frontend static files
   const clientDir = path.join(__dirname, '..', 'client');
