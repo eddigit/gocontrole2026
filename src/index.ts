@@ -43,18 +43,19 @@ async function main() {
   // Start signal aggregator
   signalAggregator.start();
 
-  // Initialize existing sessions and wire up detection
-  await sessionManager.initialize();
-  await detectionManager.wireAll();
-
-  // Listen for session connection/disconnection events
+  // Register connection handler BEFORE initialize so we never miss a 'connected' event.
+  // On connect/reconnect: tear down stale detectors (handlers bound to old socket) then rewire.
   sessionManager.on('session:connection', async (event) => {
     if (event.type === 'connected') {
+      detectionManager.teardownSession(event.sessionId);
       await detectionManager.wireAll();
     } else if (event.type === 'disconnected' || event.type === 'requires_reauth') {
       detectionManager.teardownSession(event.sessionId);
     }
   });
+
+  // Initialize existing sessions (will trigger 'connected' events handled above)
+  await sessionManager.initialize();
 
   // Start HTTP server
   await fastify.listen({ port: env.PORT, host: env.HOST });
