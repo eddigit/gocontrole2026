@@ -32,6 +32,7 @@ export class ConnectionManager extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private healthCheckTimer: NodeJS.Timeout | null = null;
   private isClosing = false;
+  private isPairing = false;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -97,7 +98,10 @@ export class ConnectionManager extends EventEmitter {
 
     // If a phone number was provided and this is a fresh session, request a pairing code
     if (pairingPhoneNumber && !state.creds.registered) {
-      // Wait briefly for the socket to be ready before requesting pairing code
+      // In pairing mode: do NOT start health check — the socket is expected to be
+      // "not connected" while waiting for the user to enter the code.
+      // Health check will start after successful connection (in handleConnectionUpdate).
+      this.isPairing = true;
       setTimeout(async () => {
         try {
           const code = await this.sock!.requestPairingCode(pairingPhoneNumber);
@@ -107,10 +111,10 @@ export class ConnectionManager extends EventEmitter {
           log.error({ err, sessionId: this.sessionId }, 'Failed to request pairing code');
         }
       }, 3000);
+    } else {
+      // Normal mode: start health check immediately
+      this.startHealthCheck();
     }
-
-    // Start health check
-    this.startHealthCheck();
   }
 
   private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
@@ -137,7 +141,7 @@ export class ConnectionManager extends EventEmitter {
         return;
       }
 
-      if (!this.isClosing) {
+      if (!this.isClosing && !this.isPairing) {
         this.scheduleReconnect();
       }
     }
@@ -146,6 +150,10 @@ export class ConnectionManager extends EventEmitter {
       const phoneNumber = this.sock?.user?.id?.replace(/:.*$/, '').replace('@s.whatsapp.net', '') ?? undefined;
       log.info({ sessionId: this.sessionId, phoneNumber }, 'Connected to WhatsApp');
       this.reconnectAttempts = 0;
+      this.isPairing = false;
+
+      // Now that we're connected, start health check (especially after pairing)
+      this.startHealthCheck();
 
       // Mark device as passive so presence updates keep flowing without affecting the master phone
       await this.sock?.sendPresenceUpdate('unavailable').catch(() => {});
