@@ -35,9 +35,9 @@ export class SessionManager extends EventEmitter {
     log.info({ count: sessions.length }, 'Loading existing sessions');
 
     for (const session of sessions) {
-      if (session.status !== 'DISCONNECTED') {
-        await this.startSession(session.id);
-      }
+      // Attempt to connect all sessions (except REQUIRES_REAUTH, filtered above).
+      // DISCONNECTED sessions should reconnect on container restart if auth keys exist.
+      await this.startSession(session.id);
     }
   }
 
