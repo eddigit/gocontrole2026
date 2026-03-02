@@ -102,6 +102,7 @@ export class ConnectionManager extends EventEmitter {
       // "not connected" while waiting for the user to enter the code.
       // Health check will start after successful connection (in handleConnectionUpdate).
       this.isPairing = true;
+      // Baileys requires at least 10s after socket init before requesting pairing code
       setTimeout(async () => {
         try {
           const code = await this.sock!.requestPairingCode(pairingPhoneNumber);
@@ -110,7 +111,7 @@ export class ConnectionManager extends EventEmitter {
         } catch (err) {
           log.error({ err, sessionId: this.sessionId }, 'Failed to request pairing code');
         }
-      }, 3000);
+      }, 10_000);
     } else {
       // Normal mode: start health check immediately
       this.startHealthCheck();

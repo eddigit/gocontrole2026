@@ -137,7 +137,7 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
 
     // Wait for pairing code event
     const code = await new Promise<string | null>((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 15_000);
+      const timeout = setTimeout(() => resolve(null), 20_000);
       conn.on('connection', (event) => {
         if (event.type === 'pairing_code') {
           clearTimeout(timeout);
