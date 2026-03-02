@@ -23,12 +23,14 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
     const sessionId = await sessionManager.createSession(name);
     const conn = await sessionManager.startSession(sessionId, phoneNumber);
 
-    // Wait for QR code, pairing code, or connection (up to 30s)
+    // Wait for QR code or pairing code (up to 30s)
+    // When phoneNumber is provided, skip QR events and wait for pairing_code
+    const usePairingCode = !!phoneNumber;
     const result = await new Promise<{ qr?: string; pairingCode?: string }>((resolve) => {
       const timeout = setTimeout(() => resolve({}), 30_000);
 
       conn.on('connection', (event) => {
-        if (event.type === 'qr') {
+        if (event.type === 'qr' && !usePairingCode) {
           clearTimeout(timeout);
           resolve({ qr: event.qr });
         } else if (event.type === 'pairing_code') {
