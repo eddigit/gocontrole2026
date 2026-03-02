@@ -106,7 +106,8 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // POST /api/sessions/:id/pairing-code — Regenerate a pairing code on an existing session
-  // Can be called multiple times rapidly (each code valid ~60s, imposed by WhatsApp)
+  // Always tears down and restarts the socket to guarantee a fresh connection.
+  // Can be called multiple times rapidly (each code valid ~60s, imposed by WhatsApp).
   fastify.post<{
     Params: { id: string };
     Body: { phoneNumber: string };
@@ -116,41 +117,42 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'phoneNumber is required' });
     }
 
-    let conn = sessionManager.getConnection(request.params.id);
+    const sessionId = request.params.id;
 
-    // If no active connection, start one with pairing mode
-    if (!conn) {
-      conn = await sessionManager.startSession(request.params.id, phoneNumber);
-      // Wait for socket to be ready before requesting code
-      const code = await new Promise<string | null>((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 15_000);
-        conn!.on('connection', (event) => {
-          if (event.type === 'pairing_code') {
-            clearTimeout(timeout);
-            resolve(event.code);
-          } else if (event.type === 'connected') {
-            clearTimeout(timeout);
-            resolve(null);
-          }
-        });
+    // Verify session exists in DB
+    const session = await prisma.session.findUnique({ where: { id: sessionId } });
+    if (!session) {
+      return reply.status(404).send({ error: 'Session not found' });
+    }
+
+    // Clear old auth keys so Baileys starts fresh (otherwise it tries to resume and gets 401)
+    await prisma.authKey.deleteMany({ where: { sessionId } });
+
+    // Reset session status
+    await prisma.session.update({ where: { id: sessionId }, data: { status: 'CONNECTING' } });
+
+    // Stop existing connection if any, then start fresh with pairing code
+    await sessionManager.stopSession(sessionId);
+    const conn = await sessionManager.startSession(sessionId, phoneNumber);
+
+    // Wait for pairing code event
+    const code = await new Promise<string | null>((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 15_000);
+      conn.on('connection', (event) => {
+        if (event.type === 'pairing_code') {
+          clearTimeout(timeout);
+          resolve(event.code);
+        } else if (event.type === 'connected') {
+          clearTimeout(timeout);
+          resolve(null);
+        }
       });
-      if (!code) {
-        return { pairingCode: null, connected: conn.isConnected };
-      }
-      return { pairingCode: code };
-    }
+    });
 
-    // Connection exists — request a fresh code directly on the live socket
-    if (conn.isConnected) {
-      return reply.status(400).send({ error: 'Session already connected, no pairing needed' });
+    if (!code) {
+      return { pairingCode: null, connected: conn.isConnected };
     }
-
-    try {
-      const code = await conn.requestPairingCode(phoneNumber);
-      return { pairingCode: code };
-    } catch (err) {
-      return reply.status(500).send({ error: 'Failed to generate pairing code. Try again in a few seconds.' });
-    }
+    return { pairingCode: code };
   });
 
   // POST /api/sessions/:id/start
