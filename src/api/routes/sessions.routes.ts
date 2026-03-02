@@ -105,7 +105,8 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
     return { qr: qrDataUrl, connected: false };
   });
 
-  // POST /api/sessions/:id/pairing-code — Request a pairing code for an existing session
+  // POST /api/sessions/:id/pairing-code — Regenerate a pairing code on an existing session
+  // Can be called multiple times rapidly (each code valid ~60s, imposed by WhatsApp)
   fastify.post<{
     Params: { id: string };
     Body: { phoneNumber: string };
@@ -115,30 +116,41 @@ export async function sessionRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'phoneNumber is required' });
     }
 
-    // Stop existing connection and restart with pairing code
-    await sessionManager.stopSession(request.params.id);
-    const conn = await sessionManager.startSession(request.params.id, phoneNumber);
+    let conn = sessionManager.getConnection(request.params.id);
 
-    // Wait for pairing code
-    const code = await new Promise<string | null>((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 30_000);
-
-      conn.on('connection', (event) => {
-        if (event.type === 'pairing_code') {
-          clearTimeout(timeout);
-          resolve(event.code);
-        } else if (event.type === 'connected') {
-          clearTimeout(timeout);
-          resolve(null);
-        }
+    // If no active connection, start one with pairing mode
+    if (!conn) {
+      conn = await sessionManager.startSession(request.params.id, phoneNumber);
+      // Wait for socket to be ready before requesting code
+      const code = await new Promise<string | null>((resolve) => {
+        const timeout = setTimeout(() => resolve(null), 15_000);
+        conn!.on('connection', (event) => {
+          if (event.type === 'pairing_code') {
+            clearTimeout(timeout);
+            resolve(event.code);
+          } else if (event.type === 'connected') {
+            clearTimeout(timeout);
+            resolve(null);
+          }
+        });
       });
-    });
-
-    if (!code) {
-      return { pairingCode: null, connected: conn.isConnected };
+      if (!code) {
+        return { pairingCode: null, connected: conn.isConnected };
+      }
+      return { pairingCode: code };
     }
 
-    return { pairingCode: code };
+    // Connection exists — request a fresh code directly on the live socket
+    if (conn.isConnected) {
+      return reply.status(400).send({ error: 'Session already connected, no pairing needed' });
+    }
+
+    try {
+      const code = await conn.requestPairingCode(phoneNumber);
+      return { pairingCode: code };
+    } catch (err) {
+      return reply.status(500).send({ error: 'Failed to generate pairing code. Try again in a few seconds.' });
+    }
   });
 
   // POST /api/sessions/:id/start

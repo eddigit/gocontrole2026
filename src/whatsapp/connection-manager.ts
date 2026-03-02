@@ -229,6 +229,20 @@ export class ConnectionManager extends EventEmitter {
   }
 
   /**
+   * Request a new pairing code on the live socket.
+   * Can be called multiple times (each code is valid ~60s, imposed by WhatsApp).
+   */
+  async requestPairingCode(phoneNumber: string): Promise<string> {
+    if (!this.sock) {
+      throw new Error('Socket not initialized');
+    }
+    const code = await this.sock.requestPairingCode(phoneNumber);
+    log.info({ sessionId: this.sessionId, code }, 'Pairing code generated');
+    this.emit('connection', { type: 'pairing_code', code } satisfies ConnectionEvent);
+    return code;
+  }
+
+  /**
    * Subscribe to presence updates for a given JID.
    */
   async presenceSubscribe(jid: string): Promise<void> {
